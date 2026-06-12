@@ -1,0 +1,26 @@
+[workspace]
+members = [
+    "src-tauri",
+    "crates/adb-bridge",
+    "crates/package-scanner",
+    "crates/uninstall-engine",
+    "crates/reputation-db",
+    "crates/cloud-sync",
+    "crates/system-setup",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+dirs = "6"
+base64 = "0.22"

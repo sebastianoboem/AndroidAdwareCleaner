@@ -1,0 +1,13 @@
+[package]
+name = "cloud-sync"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+reputation-db = { path = "../reputation-db" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+dirs = { workspace = true }

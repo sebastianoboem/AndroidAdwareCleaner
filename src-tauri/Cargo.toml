@@ -1,0 +1,30 @@
+[package]
+name = "android-adware-cleaner"
+version = "0.1.0"
+description = "Bulk Android adware uninstaller for repair shops"
+authors = ["ilpano"]
+edition = "2021"
+
+[lib]
+name = "android_adware_cleaner_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+adb-bridge = { path = "../crates/adb-bridge" }
+package-scanner = { path = "../crates/package-scanner" }
+uninstall-engine = { path = "../crates/uninstall-engine" }
+reputation-db = { path = "../crates/reputation-db" }
+cloud-sync = { path = "../crates/cloud-sync" }
+system-setup = { path = "../crates/system-setup" }

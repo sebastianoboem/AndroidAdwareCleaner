@@ -1,0 +1,1002 @@
+{
+  "generic": [
+    {
+      "title": "Opzioni sviluppatore",
+      "body": "Impostazioni → Info telefono → tocca 7 volte su «Numero build» finché compare il messaggio «Sei diventato uno sviluppatore».",
+      "phase": "developer"
+    },
+    {
+      "title": "Debug USB",
+      "body": "Torna indietro → Opzioni sviluppatore → abilita «Debug USB».",
+      "phase": "debug"
+    },
+    {
+      "title": "Collega il cavo USB",
+      "body": "Usa un cavo dati (non solo ricarica) e collegalo al PC. Se appare la scelta USB, seleziona «Trasferimento file» / MTP.",
+      "phase": "cable"
+    },
+    {
+      "title": "Autorizza il PC",
+      "body": "Sblocca lo schermo: accetta «Consenti debug USB?» e, se possibile, spunta «Consenti sempre da questo computer».",
+      "phase": "authorize"
+    }
+  ],
+  "generic_tips": [
+    {
+      "title": "Modalità aereo (consigliato)",
+      "body": "Dal pannello rapido attiva la modalità aereo per ridurre popup pubblicitari mentre lavori sulle impostazioni.",
+      "phase": "airplane"
+    }
+  ],
+  "brands": [
+    {
+      "brand": "Samsung",
+      "models": [
+        "SM-",
+        "Galaxy",
+        "A53",
+        "A54",
+        "A55",
+        "S21",
+        "S22",
+        "S23",
+        "S24"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Informazioni software → Numero build",
+      "safe_mode_steps": "Tieni premuto il tasto Power → tocca e tieni premuto «Spegni» → seleziona «Safe mode»",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (One UI)",
+          "body": "Impostazioni → Info telefono → Informazioni software → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB Samsung",
+          "body": "Opzioni sviluppatore → «Debug USB» ON. Abilita anche «Installa via USB» se presente.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC. Se compare la notifica USB, scegli «Trasferimento file» / Android Auto.",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta il prompt RSA. Spunta «Consenti sempre» per evitare richieste future.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto (su One UI spesso con due dita) → icona aereo, per bloccare ads di rete durante l'intervento.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode (se popup intollerabili)",
+          "body": "Power → tieni premuto «Spegni» → Safe mode. Le app terze restano disabilitate fino al riavvio normale.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Xiaomi",
+      "models": [
+        "Redmi",
+        "POCO",
+        "MI ",
+        "M2",
+        "M3",
+        "M4",
+        "M5"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info dispositivo → Versione MIUI (7 tap)",
+      "safe_mode_steps": "Tieni premuto Power → tieni premuto «Spegni» → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (MIUI)",
+          "body": "Impostazioni → Info dispositivo → 7 tap su «Versione MIUI» / «Versione HyperOS».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB MIUI",
+          "body": "Impostazioni aggiuntive → Opzioni sviluppatore → «Debug USB» e «Debug USB (Impostazioni di sicurezza)» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC. In MIUI scegli «Trasferimento file» nella notifica USB.",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta il prompt RSA con «Consenti sempre».",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo, per ridurre popup mentre apri le impostazioni.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Se il telefono è inutilizzabile: Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Huawei",
+      "models": [
+        "HUAWEI",
+        "NOH-",
+        "ELS-",
+        "ANA-",
+        "MAR-",
+        "JNY-"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (EMUI)",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB EMUI",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; seleziona «Trasferimento file» se richiesto.",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta il prompt di autorizzazione ADB.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → icona aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power off long press → Safe mode se ads bloccano la navigazione.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Google",
+      "models": [
+        "Pixel",
+        "GP4",
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+        "G7",
+        "G8",
+        "G9"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (Pixel)",
+          "body": "Impostazioni → Info telefono → «Numero build» (7 tap).",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB Pixel",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC. Se richiesto, imposta USB su «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA; spunta «Consenti sempre».",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto (2 dita) → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "OPPO",
+      "models": [
+        "OPPO",
+        "CPH",
+        "Reno",
+        "Find X",
+        "A5",
+        "A7",
+        "A9"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info dispositivo → Versione → Numero build",
+      "safe_mode_steps": "Power → tieni premuto «Spegni» → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (ColorOS)",
+          "body": "Impostazioni → Info dispositivo → Versione → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB ColorOS",
+          "body": "Impostazioni → Impostazioni aggiuntive → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; nella notifica USB scegli «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA; spunta «Consenti sempre».",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo, per ridurre popup durante l'intervento.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode se ads bloccano le impostazioni.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "realme",
+      "models": [
+        "realme",
+        "RMX",
+        "GT ",
+        "Narzo",
+        "C55",
+        "C67"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info dispositivo → Versione → Numero build",
+      "safe_mode_steps": "Power → tieni premuto «Spegni» → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (realme UI)",
+          "body": "Impostazioni → Info dispositivo → Versione → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB",
+          "body": "Impostazioni aggiuntive → Opzioni sviluppatore → «Debug USB» e «Debug USB (sicurezza)» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; scegli «Trasferimento file» nella notifica USB.",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta il prompt RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "OnePlus",
+      "models": [
+        "OnePlus",
+        "ONEPLUS",
+        "LE2",
+        "LE21",
+        "GM1",
+        "NE2",
+        "CPH24",
+        "CPH25"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info dispositivo → Versione → Numero build",
+      "safe_mode_steps": "Power → tieni premuto «Spegni» → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (OxygenOS/ColorOS)",
+          "body": "Impostazioni → Info dispositivo → Versione → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB OnePlus",
+          "body": "Impostazioni → Impostazioni aggiuntive → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; seleziona «Trasferimento file» se richiesto.",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA con «Consenti sempre».",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "vivo",
+      "models": [
+        "vivo",
+        "V2",
+        "V21",
+        "V25",
+        "Y33",
+        "Y35",
+        "iQOO",
+        "IQOO"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Versione software",
+      "safe_mode_steps": "Power → tieni premuto «Spegni» → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (Funtouch/OriginOS)",
+          "body": "Impostazioni → Info telefono → Versione software → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB vivo",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; notifica USB → «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta il prompt di autorizzazione ADB.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Motorola",
+      "models": [
+        "moto",
+        "Moto",
+        "Motorola",
+        "XT2",
+        "XT21",
+        "XT22",
+        "XT23",
+        "razr"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Tieni premuto Power → tocca e tieni «Spegni» → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (My UX)",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB Motorola",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; se appare «Solo ricarica», cambia in «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA; spunta «Consenti sempre».",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Honor",
+      "models": [
+        "Honor",
+        "HONOR",
+        "ANY-",
+        "REA-",
+        "FNE-",
+        "CRT-",
+        "VNE-"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (Magic UI)",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB Honor",
+          "body": "Impostazioni → Sistema e aggiornamenti → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; seleziona «Trasferimento file» se richiesto.",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta il prompt RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power off long press → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Nokia",
+      "models": [
+        "Nokia",
+        "NOKIA",
+        "TA-",
+        "TA1"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Tieni premuto Power → Spegni → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; scegli «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Sony",
+      "models": [
+        "Sony",
+        "SONY",
+        "Xperia",
+        "XQ-",
+        "SO-"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB Xperia",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; modalità USB → «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA con «Consenti sempre».",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Spegni → tieni premuto «Spegni» nel menu → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "ASUS",
+      "models": [
+        "ASUS",
+        "Zenfone",
+        "ROG Phone",
+        "AI2",
+        "ZS6",
+        "I00"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (ZenUI)",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB ASUS",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; seleziona «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Nothing",
+      "models": [
+        "Nothing",
+        "A063",
+        "A065",
+        "A142",
+        "Phone (2)",
+        "Phone (1)"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (Nothing OS)",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; USB → «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "TECNO",
+      "models": [
+        "TECNO",
+        "Tecno",
+        "CK",
+        "KI",
+        "LG7n"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (HiOS)",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; scegli «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Infinix",
+      "models": [
+        "Infinix",
+        "INFINIX",
+        "X68",
+        "X67",
+        "Note "
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore (XOS)",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; notifica USB → «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "LG",
+      "models": [
+        "LG-",
+        "LM-",
+        "LGM-",
+        "G8",
+        "V60",
+        "Velvet"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Riavvia → tieni premuto Volume giù all'avvio → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB LG",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; modalità «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode (LG)",
+          "body": "Spegni → tieni Volume giù mentre si riaccende fino al logo.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "ZTE",
+      "models": [
+        "ZTE",
+        "Blade",
+        "Axon",
+        "A70",
+        "A51"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; «Trasferimento file» se richiesto.",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Lenovo",
+      "models": [
+        "Lenovo",
+        "LENOVO",
+        "TB-",
+        "P2",
+        "K15",
+        "Legion"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info dispositivo → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore",
+          "body": "Impostazioni → Info dispositivo → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; tablet spesso richiede «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    },
+    {
+      "brand": "Fairphone",
+      "models": [
+        "Fairphone",
+        "FP4",
+        "FP5",
+        "FP3"
+      ],
+      "build_number_taps": 7,
+      "developer_menu_path": "Impostazioni → Info telefono → Numero build",
+      "safe_mode_steps": "Power → Spegni (long press) → Safe mode",
+      "steps": [
+        {
+          "title": "Opzioni sviluppatore",
+          "body": "Impostazioni → Info telefono → 7 tap su «Numero build».",
+          "phase": "developer"
+        },
+        {
+          "title": "Debug USB",
+          "body": "Impostazioni → Sistema → Opzioni sviluppatore → «Debug USB» ON.",
+          "phase": "debug"
+        },
+        {
+          "title": "Collega il cavo USB",
+          "body": "Cavo dati al PC; «Trasferimento file».",
+          "phase": "cable"
+        },
+        {
+          "title": "Autorizza il PC",
+          "body": "Sblocca lo schermo e accetta RSA.",
+          "phase": "authorize"
+        }
+      ],
+      "tips": [
+        {
+          "title": "Modalità aereo (consigliato)",
+          "body": "Swipe dall'alto → aereo.",
+          "phase": "airplane"
+        },
+        {
+          "title": "Safe Mode",
+          "body": "Power → Spegni (long press) → Safe mode.",
+          "phase": "safe_mode"
+        }
+      ]
+    }
+  ]
+}

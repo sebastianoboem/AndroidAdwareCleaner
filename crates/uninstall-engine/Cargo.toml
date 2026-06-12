@@ -1,0 +1,9 @@
+[package]
+name = "uninstall-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+adb-bridge = { path = "../adb-bridge" }
+serde = { workspace = true }
+thiserror = { workspace = true }

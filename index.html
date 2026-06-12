@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AndroidAdwareCleaner</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Schermata loading (Fase 1 e 2) -->
+      <section id="screen-loading" class="screen-blank">
+        <div class="loader" aria-hidden="true"></div>
+        <p id="loading-text" class="loading-text">Avvio…</p>
+      </section>
+
+      <!-- Fase 3–4: layout principale -->
+      <section id="screen-main" class="screen-main hidden">
+        <div id="db-panel" class="db-panel">
+          <div class="db-panel-left">
+            <div id="db-status" class="db-status-text">Database: solo locale</div>
+            <div id="db-activity" class="db-activity hidden"></div>
+          </div>
+          <div class="db-actions">
+            <span id="btn-sync-wrap" class="btn-sync-wrap">
+              <button id="btn-sync-full" class="btn small btn-sync" type="button">
+                <span class="btn-sync-label"><span class="btn-sync-icon" aria-hidden="true">☁</span> Sync</span>
+                <span class="btn-sync-spinner" aria-hidden="true"></span>
+              </button>
+              <span class="sync-tooltip" role="tooltip">
+                Database solo locale: nessuna cartella cloud configurata. Le modifiche sono salvate in tempo reale. Configura una cartella nelle impostazioni per sincronizzare con altri PC.
+              </span>
+            </span>
+            <button id="btn-settings" class="btn small" title="Impostazioni">⚙</button>
+          </div>
+        </div>
+
+        <div id="apps-panel" class="apps-panel">
+          <div class="apps-toolbar">
+            <input id="filter-text" type="search" placeholder="Cerca app…" />
+            <label class="checkbox-label">
+              <input id="hide-system" type="checkbox" checked />
+              Nascondi sistema
+            </label>
+            <label class="checkbox-label">
+              <input id="filter-suspicious" type="checkbox" />
+              Solo sospette
+            </label>
+            <button id="btn-rescan" class="btn small">Aggiorna</button>
+            <button id="btn-uninstall" class="btn small danger" disabled>Disinstalla</button>
+            <button id="btn-export" class="btn small" disabled>Report</button>
+          </div>
+          <div class="scan-info-row">
+            <p id="scan-info" class="scan-info muted"></p>
+            <div class="flag-legend" aria-label="Legenda flag">
+              <span class="flag-legend-item suspicious">⚑ Sospetta</span>
+              <span class="flag-legend-item system">⚙ Sistema</span>
+              <span class="flag-legend-item trusted">✓ Trusted</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <div id="packages-loading" class="packages-loading hidden" aria-live="polite">
+              <div class="loader loader-sm" aria-hidden="true"></div>
+              <p class="loading-text">Caricamento app in corso…</p>
+              <p id="packages-loading-hint" class="loading-hint muted hidden">
+                Con le app di sistema può richiedere alcuni minuti.
+              </p>
+            </div>
+            <table id="packages-table">
+              <thead>
+                <tr>
+                  <th class="col-check"><input id="select-all" type="checkbox" title="Seleziona tutte" /></th>
+                  <th data-sort="name">App</th>
+                  <th data-sort="uninstall">Rim.</th>
+                  <th data-sort="report">Segn.</th>
+                  <th class="col-flags">Flags</th>
+                </tr>
+              </thead>
+              <tbody id="packages-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Popup: ADB mancante (Fase 1) -->
+    <dialog id="dialog-adb">
+      <h2>ADB non trovato</h2>
+      <p id="dialog-adb-message" class="dialog-body"></p>
+      <div class="dialog-actions">
+        <button id="btn-adb-install" class="btn primary">Installa automaticamente</button>
+        <button id="btn-adb-browse" class="btn">Specifica percorso…</button>
+      </div>
+    </dialog>
+
+    <!-- Popup: connessione fallita (Fase 2) -->
+    <div id="dialog-connection" class="modal-overlay hidden" role="dialog" aria-modal="true">
+      <div class="modal-panel modal-panel-connection">
+        <h2>Dispositivo non connesso</h2>
+        <p class="dialog-body">Segui i passaggi qui sotto, poi riprova la connessione USB.</p>
+        <div class="dialog-filters">
+          <label>
+            Marca
+            <select id="conn-brand"><option value="">— Auto da modello —</option></select>
+          </label>
+          <label>
+            Modello
+            <input id="conn-model" type="text" placeholder="es. SM-A536B, Pixel 7, Redmi Note" />
+          </label>
+        </div>
+        <p id="conn-resolved" class="conn-resolved hidden"></p>
+        <div id="conn-guide-steps" class="guide-steps">
+          <p class="guide-loading muted">Caricamento istruzioni…</p>
+        </div>
+        <div id="conn-guide-tips" class="guide-tips hidden"></div>
+        <div class="dialog-actions">
+          <button id="btn-retry-connection" class="btn primary">Riprova connessione</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Impostazioni -->
+    <div id="dialog-settings" class="modal-overlay hidden" role="dialog" aria-modal="true">
+      <div class="modal-panel modal-panel-settings">
+        <h2>Impostazioni</h2>
+        <section class="settings-section">
+          <h3>Sincronizzazione database</h3>
+          <p class="settings-hint muted">
+            Il database reputazione viene salvato come <code>reputation-sync.json</code> in una cartella
+            sincronizzata dal client cloud installato sul PC (non serve login nell'app).
+          </p>
+          <div id="settings-providers" class="settings-providers"></div>
+          <div id="settings-custom-path" class="settings-custom hidden">
+            <label class="settings-path-label">
+              Cartella
+              <input id="settings-folder-input" type="text" readonly placeholder="Nessuna cartella selezionata" />
+            </label>
+            <button id="btn-settings-browse" type="button" class="btn small">Sfoglia…</button>
+          </div>
+          <p id="settings-sync-status" class="settings-status muted"></p>
+        </section>
+        <section class="settings-section">
+          <h3>Applicazione</h3>
+          <p id="settings-app-version" class="settings-status muted">Versione: …</p>
+          <button id="btn-settings-check-update" type="button" class="btn small">Cerca aggiornamenti</button>
+        </section>
+        <div class="dialog-actions">
+          <button id="btn-settings-sync-now" type="button" class="btn">Sync ora</button>
+          <button id="btn-settings-close" type="button" class="btn primary">Chiudi</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="dialog-update" class="modal-overlay hidden" role="dialog" aria-modal="true">
+      <div class="modal-panel">
+        <h2>Aggiornamento disponibile</h2>
+        <p id="update-version" class="update-version"></p>
+        <p id="update-notes" class="dialog-body muted"></p>
+        <div id="update-progress" class="update-progress hidden">
+          <div class="loader loader-sm" aria-hidden="true"></div>
+          <p id="update-progress-text" class="loading-text">Download in corso…</p>
+        </div>
+        <div class="dialog-actions">
+          <button id="btn-update-later" type="button" class="btn">Più tardi</button>
+          <button id="btn-update-now" type="button" class="btn primary">Aggiorna ora</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
