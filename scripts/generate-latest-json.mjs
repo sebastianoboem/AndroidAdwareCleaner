@@ -38,8 +38,8 @@ if (!opts.version || !opts.baseUrl) {
 }
 
 const artifactNames = {
-  "darwin-aarch64": "AndroidAdwareCleaner.app.tar.gz",
-  "darwin-x86_64": "AndroidAdwareCleaner.app.tar.gz",
+  "darwin-aarch64": `AndroidAdwareCleaner_${opts.version}_aarch64.app.tar.gz`,
+  "darwin-x86_64": `AndroidAdwareCleaner_${opts.version}_x64.app.tar.gz`,
   "windows-x86_64": `AndroidAdwareCleaner_${opts.version}_x64-setup.exe`,
 };
 

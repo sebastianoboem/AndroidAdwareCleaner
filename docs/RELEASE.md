@@ -37,7 +37,7 @@ CI=true npm run tauri signer generate -- -w src-tauri/.tauri-signing.key -f -p "
 ## Build release firmate
 
 ```bash
-export TAURI_SIGNING_PRIVATE_KEY_PATH="src-tauri/.tauri-signing.key"
+export TAURI_SIGNING_PRIVATE_KEY="$(cat src-tauri/.tauri-signing.key)"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 
 # macOS arm64
