@@ -4,9 +4,7 @@
 
 App desktop per **macOS** e **Windows** che collega il telefono via USB (ADB), elenca le app installate, evidenzia quelle sospette grazie a un database condiviso, e permette di disinstallarle in blocco con report per il cliente.
 
-<p align="center">
-  <img src="docs/screenshots/03-app-list.png" alt="Lista app con icone, flag e database reputazione" width="720" />
-</p>
+![Screenshot della schermata principale con lista app, icone, flag e contatori del database reputazione.](/docs/screenshots/03-app-list.png)
 
 ---
 
@@ -25,13 +23,9 @@ App desktop per **macOS** e **Windows** che collega il telefono via USB (ADB), e
 
 All’avvio l’app verifica ADB e guida alla connessione USB: opzioni sviluppatore, debug USB, autorizzazione PC. Supporta le principali marche con istruzioni Safe Mode per modello.
 
-<p align="center">
-  <img src="docs/screenshots/01-connection-guide.png" alt="Guida connessione dispositivo" width="520" />
-</p>
+![Screenshot della guida connessione dispositivo con i passaggi per abilitare il debug USB.](/docs/screenshots/01-connection-guide.png)
 
-<p align="center">
-  <img src="docs/screenshots/02-brand-selector.png" alt="Selezione marca dispositivo" width="520" />
-</p>
+![Screenshot del selettore marca dispositivo con elenco Samsung, Xiaomi, Google e altre.](/docs/screenshots/02-brand-selector.png)
 
 ### 2. Scansiona e filtra
 
@@ -47,9 +41,7 @@ Ogni riga ha tre flag:
 | ⚙️ **Sistema** | Escludi dall’elenco (app di sistema) |
 | ✅ **Trusted** | App sicura — non compare tra le sospette |
 
-<p align="center">
-  <img src="docs/screenshots/04-flags-suspicious.png" alt="App segnate come sospette con badge e flag attive" width="720" />
-</p>
+![Screenshot di app segnate come sospette con badge arancioni e flag rosse attive.](/docs/screenshots/04-flags-suspicious.png)
 
 Le colonne **Rim.** e **Segn.** mostrano quante volte l’app è stata rimossa o segnalata nel database (tuo negozio + sync cloud).
 
@@ -57,13 +49,9 @@ Le colonne **Rim.** e **Segn.** mostrano quante volte l’app è stata rimossa o
 
 Seleziona più app → **Disinstalla**. Il database si aggiorna e, se configurato, viene sincronizzato sul cloud.
 
-<p align="center">
-  <img src="docs/screenshots/06-bulk-uninstall.png" alt="Selezione multipla per disinstallazione" width="720" />
-</p>
+![Screenshot della selezione multipla di app sospette pronte per la disinstallazione.](/docs/screenshots/06-bulk-uninstall.png)
 
-<p align="center">
-  <img src="docs/screenshots/05-filter-suspicious.png" alt="Filtro solo app sospette" width="720" />
-</p>
+![Screenshot del filtro Solo sospette attivo con tre app cleaner evidenziate.](/docs/screenshots/05-filter-suspicious.png)
 
 ### 5. Sync e aggiornamenti
 
@@ -85,6 +73,7 @@ Seleziona più app → **Disinstalla**. Il database si aggiorna e, se configurat
 
 ## Download
 
+> [!NOTE]
 > Le build ufficiali saranno pubblicate nelle [GitHub Releases](https://github.com/sebastianoboem/AndroidAdwareCleaner/releases).
 
 | Piattaforma | File |
