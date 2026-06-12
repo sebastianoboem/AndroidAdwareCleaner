@@ -1,8 +1,8 @@
 # AndroidAdwareCleaner
 
-**Pulizia adware e app sospette su Android — pensato per negozi di riparazione.**
+**Pulizia adware e app sospette su Android.**
 
-App desktop per **macOS** e **Windows** che collega il telefono via USB (ADB), elenca le app installate, evidenzia quelle sospette grazie a un database condiviso, e permette di disinstallarle in blocco con report per il cliente.
+App desktop per **macOS** e **Windows** che collega il telefono via USB (ADB), elenca le app installate, evidenzia quelle sospette grazie a un database condiviso, e permette di disinstallarle in blocco con un report riepilogativo.
 
 ![Screenshot della schermata principale con lista app, icone, flag e contatori del database reputazione.](/docs/screenshots/03-app-list.png)
 
@@ -10,10 +10,10 @@ App desktop per **macOS** e **Windows** che collega il telefono via USB (ADB), e
 
 ## Perché usarlo
 
-- **Veloce in banco:** niente menu Android a mano — vedi subito cleaner, VPN truffaldine e adware.
-- **Memoria di negozio:** ogni disinstallazione e segnalazione alimenta un database locale (e opzionalmente cloud) con conteggio *«rimossa X volte»* / *«segnalata X volte»*.
+- **Workflow rapido:** niente menu Android a mano — vedi subito cleaner, VPN truffaldine e adware.
+- **Database reputazione:** ogni disinstallazione e segnalazione alimenta un database locale (e opzionalmente cloud) con conteggio *«rimossa X volte»* / *«segnalata X volte»*.
 - **Sicuro:** blocklist per app di sistema; conferma prima della disinstallazione; niente bypass di FRP o autorizzazione ADB.
-- **Multi-PC:** sincronizza il database su Google Drive / OneDrive (cartella condivisa tra i PC del negozio).
+- **Multi-PC:** sincronizza il database su Google Drive / OneDrive (cartella condivisa tra più PC).
 
 ---
 
@@ -43,7 +43,7 @@ Ogni riga ha tre flag:
 
 ![Screenshot di app segnate come sospette con badge arancioni e flag rosse attive.](/docs/screenshots/04-flags-suspicious.png)
 
-Le colonne **Rim.** e **Segn.** mostrano quante volte l’app è stata rimossa o segnalata nel database (tuo negozio + sync cloud).
+Le colonne **Rim.** e **Segn.** mostrano quante volte l’app è stata rimossa o segnalata nel database (locale + sync cloud).
 
 ### 4. Disinstalla in blocco
 
@@ -111,10 +111,10 @@ Versioning e pubblicazione release: [docs/RELEASE.md](docs/RELEASE.md).
 
 ## Note legali
 
-Utilizzare solo con **consenso del cliente**. Lo strumento non aggira protezioni del dispositivo (FRP, blocco schermo, ecc.).
+Utilizzare solo con **consenso del proprietario del dispositivo**. Lo strumento non aggira protezioni del dispositivo (FRP, blocco schermo, ecc.).
 
 ---
 
 ## Licenza
 
-Progetto proprietario — © Sebastiano Boem. Tutti i diritti riservati.
+[MIT](LICENSE) — © Sebastiano Boem
