@@ -492,16 +492,18 @@ async function onDeviceConnected() {
 
   await refreshDbPanel();
   await scanPackages();
-  void checkForAppUpdates(true);
 }
 
 let pendingUpdate: Update | null = null;
+let continueAfterUpdateCheck: (() => void) | null = null;
 
 function closeUpdateDialog() {
   $("#dialog-update")!.classList.add("hidden");
   $("#update-progress")!.classList.add("hidden");
   ($("#btn-update-now") as HTMLButtonElement).disabled = false;
   ($("#btn-update-later") as HTMLButtonElement).disabled = false;
+  continueAfterUpdateCheck?.();
+  continueAfterUpdateCheck = null;
 }
 
 function showUpdateDialog(update: Update) {
@@ -510,6 +512,20 @@ function showUpdateDialog(update: Update) {
   ($("#update-notes") as HTMLElement).textContent =
     update.body?.trim() || "Sono disponibili miglioramenti e correzioni.";
   $("#dialog-update")!.classList.remove("hidden");
+}
+
+async function checkForAppUpdatesOnStartup(): Promise<void> {
+  setLoading("Controllo aggiornamenti…");
+  try {
+    const update = await check();
+    if (!update) return;
+    showUpdateDialog(update);
+    await new Promise<void>((resolve) => {
+      continueAfterUpdateCheck = resolve;
+    });
+  } catch {
+    // offline o release non pubblicata — continua verso la connessione device
+  }
 }
 
 async function checkForAppUpdates(silent = true) {
@@ -1139,7 +1155,9 @@ async function exportReport(format: "csv" | "pdf") {
 
 async function boot() {
   const ok = await runPhase1();
-  if (ok) await runPhase2();
+  if (!ok) return;
+  await checkForAppUpdatesOnStartup();
+  await runPhase2();
 }
 
 window.addEventListener("DOMContentLoaded", () => {
