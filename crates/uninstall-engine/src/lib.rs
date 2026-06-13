@@ -60,28 +60,38 @@ impl UninstallEngine {
         packages: &[String],
         dry_run: bool,
     ) -> Result<Vec<UninstallResult>, UninstallError> {
-        let mut results = Vec::new();
+        self.bulk_uninstall_with_progress(packages, dry_run, |_, _, _| {})
+    }
 
-        for package in packages {
-            if Self::is_blocklisted(package) {
-                results.push(UninstallResult {
+    pub fn bulk_uninstall_with_progress<F>(
+        &self,
+        packages: &[String],
+        dry_run: bool,
+        mut on_progress: F,
+    ) -> Result<Vec<UninstallResult>, UninstallError>
+    where
+        F: FnMut(usize, usize, &UninstallResult),
+    {
+        let total = packages.len();
+        let mut results = Vec::with_capacity(total);
+
+        for (index, package) in packages.iter().enumerate() {
+            let result = if Self::is_blocklisted(package) {
+                UninstallResult {
                     package_name: package.clone(),
                     status: UninstallStatus::Skipped,
                     message: "blocklisted system package".into(),
-                });
-                continue;
-            }
-
-            if dry_run {
-                results.push(UninstallResult {
+                }
+            } else if dry_run {
+                UninstallResult {
                     package_name: package.clone(),
                     status: UninstallStatus::Skipped,
                     message: "dry run — no changes made".into(),
-                });
-                continue;
-            }
-
-            let result = self.uninstall_one(package);
+                }
+            } else {
+                self.uninstall_one(package)
+            };
+            on_progress(index + 1, total, &result);
             results.push(result);
         }
 

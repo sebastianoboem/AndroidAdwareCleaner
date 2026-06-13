@@ -4,20 +4,13 @@ use package_scanner::ScannedPackage;
 use reputation_db::PackageReputation;
 use serde::{Deserialize, Serialize};
 use system_setup::{load_guides, resolve_guide, DeviceGuides, GuideStep};
+use tauri::ipc::Channel;
 use tauri::State;
 use uninstall_engine::{UninstallEngine, UninstallResult};
 
 pub const SUSPICIOUS_THRESHOLD: u64 = reputation_db::SUSPICIOUS_UNINSTALL_THRESHOLD;
 
-#[derive(Debug, Serialize)]
-pub struct ScanResult {
-    pub packages: Vec<PackageRow>,
-    pub device_serial: String,
-    pub device_model: Option<String>,
-    pub device_brand: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PackageRow {
     pub package_name: String,
     pub label: Option<String>,
@@ -187,14 +180,41 @@ pub fn sync_push(state: State<'_, AppState>) -> Result<cloud_sync::SyncStatus, S
     Ok(sync.status())
 }
 
-struct ScanCoreResult {
-    packages: Vec<ScannedPackage>,
-    device_serial: String,
-    device_model: Option<String>,
-    device_brand: Option<String>,
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScanProgressEvent {
+    Started {
+        total: usize,
+        device_serial: String,
+        device_model: Option<String>,
+        device_brand: Option<String>,
+    },
+    Package {
+        row: PackageRow,
+    },
+    Finished,
 }
 
-fn scan_packages_core(user_only: bool, serial: Option<String>) -> Result<ScanCoreResult, String> {
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum UninstallProgressEvent {
+    Started { total: usize },
+    Item {
+        current: usize,
+        total: usize,
+        package_name: String,
+        status: String,
+        message: String,
+    },
+    Finished,
+}
+
+fn scan_packages_streaming(
+    user_only: bool,
+    serial: Option<String>,
+    reputations: std::collections::HashMap<String, PackageReputation>,
+    on_progress: Channel<ScanProgressEvent>,
+) -> Result<(), String> {
     let bridge = match serial {
         Some(s) => AdbBridge::with_serial(s).map_err(|e| e.to_string())?,
         None => AdbBridge::new().map_err(|e| e.to_string())?,
@@ -204,14 +224,25 @@ fn scan_packages_core(user_only: bool, serial: Option<String>) -> Result<ScanCor
     let device_brand = bridge.get_device_property("ro.product.brand").ok();
 
     let scanner = package_scanner::PackageScanner::new(bridge);
-    let packages = scanner.scan(user_only).map_err(|e| e.to_string())?;
+    scanner
+        .scan_with_progress(user_only, |event| match event {
+            package_scanner::ScanProgress::Started { total } => {
+                let _ = on_progress.send(ScanProgressEvent::Started {
+                    total,
+                    device_serial: device_serial.clone(),
+                    device_model: device_model.clone(),
+                    device_brand: device_brand.clone(),
+                });
+            }
+            package_scanner::ScanProgress::Package(pkg) => {
+                let row = package_to_row(pkg, &reputations);
+                let _ = on_progress.send(ScanProgressEvent::Package { row });
+            }
+        })
+        .map_err(|e| e.to_string())?;
 
-    Ok(ScanCoreResult {
-        packages,
-        device_serial,
-        device_model,
-        device_brand,
-    })
+    let _ = on_progress.send(ScanProgressEvent::Finished);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -219,31 +250,24 @@ pub async fn scan_packages(
     state: State<'_, AppState>,
     user_only: bool,
     serial: Option<String>,
-) -> Result<ScanResult, String> {
-    let core = tauri::async_runtime::spawn_blocking(move || scan_packages_core(user_only, serial))
-        .await
-        .map_err(|e| format!("scansione interrotta: {e}"))??;
+    on_progress: Channel<ScanProgressEvent>,
+) -> Result<(), String> {
+    let reputations: std::collections::HashMap<String, PackageReputation> = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.all_reputations()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.package_name.clone(), r))
+            .collect()
+    };
 
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    let reputations: std::collections::HashMap<String, PackageReputation> = db
-        .all_reputations()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|r| (r.package_name.clone(), r))
-        .collect();
-
-    let rows: Vec<PackageRow> = core
-        .packages
-        .into_iter()
-        .map(|p| package_to_row(p, &reputations))
-        .collect();
-
-    Ok(ScanResult {
-        packages: rows,
-        device_serial: core.device_serial,
-        device_model: core.device_model,
-        device_brand: core.device_brand,
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_packages_streaming(user_only, serial, reputations, on_progress)
     })
+    .await
+    .map_err(|e| format!("scansione interrotta: {e}"))??;
+
+    Ok(())
 }
 
 fn package_to_row(
@@ -285,21 +309,51 @@ pub struct UninstallRequest {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn bulk_uninstall(
+pub async fn bulk_uninstall(
     state: State<'_, AppState>,
     req: UninstallRequest,
-) -> Result<Vec<UninstallResult>, String> {
-    let bridge = match req.serial {
-        Some(s) => AdbBridge::with_serial(s).map_err(|e| e.to_string())?,
-        None => AdbBridge::new().map_err(|e| e.to_string())?,
-    };
-    let device_serial = bridge.get_serial().map_err(|e| e.to_string())?;
-    let engine = UninstallEngine::new(bridge);
-    let results = engine
-        .bulk_uninstall(&req.packages, req.dry_run)
-        .map_err(|e| e.to_string())?;
+    on_progress: Channel<UninstallProgressEvent>,
+) -> Result<(), String> {
+    let packages = req.packages.clone();
+    let dry_run = req.dry_run;
+    let serial = req.serial.clone();
+    let total = packages.len();
+    let on_progress_worker = on_progress.clone();
 
-    if !req.dry_run {
+    let results = tauri::async_runtime::spawn_blocking(move || {
+        let _ = on_progress_worker.send(UninstallProgressEvent::Started { total });
+
+        let bridge = match serial {
+            Some(s) => AdbBridge::with_serial(s).map_err(|e| e.to_string())?,
+            None => AdbBridge::new().map_err(|e| e.to_string())?,
+        };
+        let device_serial = bridge.get_serial().map_err(|e| e.to_string())?;
+        let engine = UninstallEngine::new(bridge);
+        let results = engine
+            .bulk_uninstall_with_progress(&packages, dry_run, |current, total, result| {
+                let status = match result.status {
+                    uninstall_engine::UninstallStatus::Success => "success",
+                    uninstall_engine::UninstallStatus::Failed => "failed",
+                    uninstall_engine::UninstallStatus::Skipped => "skipped",
+                };
+                let _ = on_progress_worker.send(UninstallProgressEvent::Item {
+                    current,
+                    total,
+                    package_name: result.package_name.clone(),
+                    status: status.into(),
+                    message: result.message.clone(),
+                });
+            })
+            .map_err(|e| e.to_string())?;
+
+        Ok::<(Vec<UninstallResult>, String), String>((results, device_serial))
+    })
+    .await
+    .map_err(|e| format!("disinstallazione interrotta: {e}"))??;
+
+    let (results, device_serial) = results;
+
+    if !dry_run {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         for r in &results {
             if r.status == uninstall_engine::UninstallStatus::Success {
@@ -315,7 +369,8 @@ pub fn bulk_uninstall(
         push_db(&state)?;
     }
 
-    Ok(results)
+    let _ = on_progress.send(UninstallProgressEvent::Finished);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "snake_case")]

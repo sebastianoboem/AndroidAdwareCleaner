@@ -1,5 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -63,12 +63,28 @@ interface PackageReputation {
 
 const SUSPICIOUS_UNINSTALL_THRESHOLD = 5;
 
-interface ScanResult {
-  packages: PackageRow[];
-  device_serial: string;
-  device_model: string | null;
-  device_brand: string | null;
-}
+type ScanProgressEvent =
+  | {
+      kind: "started";
+      total: number;
+      device_serial: string;
+      device_model: string | null;
+      device_brand: string | null;
+    }
+  | { kind: "package"; row: PackageRow }
+  | { kind: "finished" };
+
+type UninstallProgressEvent =
+  | { kind: "started"; total: number }
+  | {
+      kind: "item";
+      current: number;
+      total: number;
+      package_name: string;
+      status: string;
+      message: string;
+    }
+  | { kind: "finished" };
 
 interface SyncStatus {
   configured: boolean;
@@ -100,6 +116,7 @@ interface SyncSettingsView {
 let packages: PackageRow[] = [];
 let packagesScanScope: "user" | "full" = "user";
 let scanInFlight = false;
+let operationInFlight = false;
 let deviceSerial = "";
 let deviceBrand = "";
 let deviceModel = "";
@@ -646,19 +663,102 @@ function getFilteredPackages(): PackageRow[] {
   });
 }
 
+function setOperationProgress(
+  visible: boolean,
+  current: number,
+  total: number,
+  label: string,
+) {
+  const bar = $("#operation-progress");
+  const fill = $("#progress-fill");
+  const text = $("#operation-progress-text");
+  const track = bar?.querySelector(".progress-track") as HTMLElement | null;
+  if (!bar || !fill || !text) return;
+
+  if (visible) {
+    bar.classList.remove("hidden");
+    const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+    fill.style.width = `${pct}%`;
+    text.textContent = label;
+    if (track) {
+      track.setAttribute("aria-valuenow", String(pct));
+      track.setAttribute("aria-valuemax", "100");
+    }
+  } else {
+    bar.classList.add("hidden");
+    fill.style.width = "0%";
+    text.textContent = "";
+  }
+}
+
 function setPackagesLoading(loading: boolean, longHint = false) {
-  const overlay = $("#packages-loading");
-  const hint = $("#packages-loading-hint");
   const tbody = $("#packages-body");
   if (loading) {
     tbody!.innerHTML = "";
-    overlay?.classList.remove("hidden");
-    hint?.classList.toggle("hidden", !longHint);
     setScanControlsDisabled(true);
+    setOperationProgress(true, 0, 0, longHint
+      ? "Scansione app… (con le app di sistema può richiedere alcuni minuti)"
+      : "Scansione app…");
   } else {
-    overlay?.classList.add("hidden");
+    setOperationProgress(false, 0, 0, "");
     setScanControlsDisabled(false);
   }
+}
+
+function buildPackageRowHtml(p: PackageRow): string {
+  const badges = [];
+  if (p.is_suspicious) badges.push('<span class="badge suspicious">sospetta</span>');
+  if (p.is_system) badges.push('<span class="badge system">sistema</span>');
+  if (p.marked_system && !p.is_system) badges.push('<span class="badge system">sistema DB</span>');
+  if (p.marked_trusted) badges.push('<span class="badge trusted">trusted</span>');
+  if (p.is_device_admin) badges.push('<span class="badge admin">admin</span>');
+
+  const title = p.label ?? p.package_name;
+  const authorLine = p.author
+    ? `<span class="pkg-by"> by </span><span class="pkg-author">${escapeHtml(p.author)}</span>`
+    : "";
+
+  const checked = selectedPackages.has(p.package_name) ? " checked" : "";
+  return `
+    <tr class="${p.is_suspicious ? "row-suspicious" : ""}" data-package="${p.package_name}">
+      <td class="col-check"><input type="checkbox" class="pkg-check" data-package="${p.package_name}"${checked} /></td>
+      <td>
+        <div class="pkg-row-main">
+          ${packageIconHtml(p.icon_url)}
+          <div class="pkg-text">
+            <div class="pkg-headline">
+              <span class="pkg-title">${escapeHtml(title)}</span>${authorLine}${badges.join("")}
+            </div>
+            <span class="pkg-id">${escapeHtml(p.package_name)}</span>
+          </div>
+        </div>
+      </td>
+      <td>${p.uninstall_count > 0 ? `<strong>${p.uninstall_count}×</strong>` : "—"}</td>
+      <td>${p.report_count > 0 ? `<strong>${p.report_count}×</strong>` : "—"}</td>
+      <td class="col-flags">
+        <button type="button" class="btn-flag btn-flag-suspicious ${p.is_reported ? "active" : ""}"
+          data-package="${p.package_name}" title="Segnala sospetta/adware">⚑</button>
+        <button type="button" class="btn-flag btn-flag-system ${p.marked_system ? "active" : ""}"
+          data-package="${p.package_name}" title="Segna come app di sistema">⚙</button>
+        <button type="button" class="btn-flag btn-flag-trusted ${p.marked_trusted ? "active" : ""}"
+          data-package="${p.package_name}" title="Segna come app trusted">✓</button>
+      </td>
+    </tr>`;
+}
+
+function appendPackageRow(p: PackageRow) {
+  const tbody = $("#packages-body");
+  if (!tbody) return;
+  tbody.insertAdjacentHTML("beforeend", buildPackageRowHtml(p));
+}
+
+function removePackageRow(packageName: string) {
+  const row = $("#packages-body")?.querySelector(
+    `tr[data-package="${CSS.escape(packageName)}"]`,
+  );
+  row?.remove();
+  packages = packages.filter((p) => p.package_name !== packageName);
+  selectedPackages.delete(packageName);
 }
 
 function setScanControlsDisabled(disabled: boolean) {
@@ -703,46 +803,7 @@ function renderTable() {
   });
 
   tbody.innerHTML = filtered
-    .map((p) => {
-      const badges = [];
-      if (p.is_suspicious) badges.push('<span class="badge suspicious">sospetta</span>');
-      if (p.is_system) badges.push('<span class="badge system">sistema</span>');
-      if (p.marked_system && !p.is_system) badges.push('<span class="badge system">sistema DB</span>');
-      if (p.marked_trusted) badges.push('<span class="badge trusted">trusted</span>');
-      if (p.is_device_admin) badges.push('<span class="badge admin">admin</span>');
-
-      const title = p.label ?? p.package_name;
-      const authorLine = p.author
-        ? `<span class="pkg-by"> by </span><span class="pkg-author">${escapeHtml(p.author)}</span>`
-        : "";
-
-      const checked = selectedPackages.has(p.package_name) ? " checked" : "";
-      return `
-    <tr class="${p.is_suspicious ? "row-suspicious" : ""}">
-      <td class="col-check"><input type="checkbox" class="pkg-check" data-package="${p.package_name}"${checked} /></td>
-      <td>
-        <div class="pkg-row-main">
-          ${packageIconHtml(p.icon_url)}
-          <div class="pkg-text">
-            <div class="pkg-headline">
-              <span class="pkg-title">${escapeHtml(title)}</span>${authorLine}${badges.join("")}
-            </div>
-            <span class="pkg-id">${escapeHtml(p.package_name)}</span>
-          </div>
-        </div>
-      </td>
-      <td>${p.uninstall_count > 0 ? `<strong>${p.uninstall_count}×</strong>` : "—"}</td>
-      <td>${p.report_count > 0 ? `<strong>${p.report_count}×</strong>` : "—"}</td>
-      <td class="col-flags">
-        <button type="button" class="btn-flag btn-flag-suspicious ${p.is_reported ? "active" : ""}"
-          data-package="${p.package_name}" title="Segnala sospetta/adware">⚑</button>
-        <button type="button" class="btn-flag btn-flag-system ${p.marked_system ? "active" : ""}"
-          data-package="${p.package_name}" title="Segna come app di sistema">⚙</button>
-        <button type="button" class="btn-flag btn-flag-trusted ${p.marked_trusted ? "active" : ""}"
-          data-package="${p.package_name}" title="Segna come app trusted">✓</button>
-      </td>
-    </tr>`;
-    })
+    .map((p) => buildPackageRowHtml(p))
     .join("");
 
   updateActionButtons();
@@ -756,36 +817,77 @@ function updateActionButtons() {
 }
 
 async function scanPackages(options?: { forceFull?: boolean }) {
-  if (scanInFlight) return;
+  if (scanInFlight || operationInFlight) return;
 
   const hideSystem = ($("#hide-system") as HTMLInputElement).checked;
   const userOnly = options?.forceFull ? false : hideSystem;
   const longHint = !userOnly;
 
   scanInFlight = true;
+  operationInFlight = true;
+  packages = [];
   setPackagesLoading(true, longHint);
   ($("#scan-info") as HTMLElement).textContent = "Scansione app…";
 
+  let received = 0;
+  let total = 0;
+
+  const onProgress = new Channel<ScanProgressEvent>();
+  onProgress.onmessage = (event) => {
+    if (event.kind === "started") {
+      total = event.total;
+      deviceSerial = event.device_serial;
+      deviceBrand = event.device_brand ?? deviceBrand;
+      deviceModel = event.device_model ?? deviceModel;
+      setOperationProgress(
+        true,
+        0,
+        total,
+        longHint
+          ? `Scansione app… 0 / ${total} (con le app di sistema può richiedere alcuni minuti)`
+          : `Scansione app… 0 / ${total}`,
+      );
+      updateScanInfo();
+      return;
+    }
+
+    if (event.kind === "package") {
+      packages.push(event.row);
+      received += 1;
+      appendPackageRow(event.row);
+      setOperationProgress(
+        true,
+        received,
+        total,
+        longHint
+          ? `Scansione app… ${received} / ${total} (con le app di sistema può richiedere alcuni minuti)`
+          : `Scansione app… ${received} / ${total}`,
+      );
+      ($("#scan-info") as HTMLElement).textContent = `Scansione app… ${received} / ${total}`;
+      return;
+    }
+
+    if (event.kind === "finished") {
+      pruneSelectedPackages();
+      packagesScanScope = userOnly ? "user" : "full";
+      renderTable();
+      updateScanInfo();
+    }
+  };
+
   try {
-    const result = await invoke<ScanResult>("scan_packages", {
+    await invoke("scan_packages", {
       user_only: userOnly,
       serial: null,
+      on_progress: onProgress,
     });
-    packages = result.packages;
-    pruneSelectedPackages();
-    packagesScanScope = userOnly ? "user" : "full";
-    deviceSerial = result.device_serial;
-    deviceBrand = result.device_brand ?? deviceBrand;
-    deviceModel = result.device_model ?? deviceModel;
-
-    updateScanInfo();
-    renderTable();
     await refreshDbPanel();
   } catch (e) {
     ($("#scan-info") as HTMLElement).textContent = `Errore: ${e}`;
     toast(`Errore scansione: ${e}`, "error");
   } finally {
     scanInFlight = false;
+    operationInFlight = false;
     setPackagesLoading(false);
   }
 }
@@ -873,24 +975,56 @@ async function toggleMark(
 
 async function bulkUninstall() {
   const selected = getSelectedPackages();
-  if (!selected.length) return;
+  if (!selected.length || operationInFlight) return;
   if (!confirm(`Disinstallare ${selected.length} app selezionate?`)) return;
 
-  const uninstallBtn = $("#btn-uninstall") as HTMLButtonElement;
-  uninstallBtn.disabled = true;
+  operationInFlight = true;
+  setScanControlsDisabled(true);
+  ($("#btn-uninstall") as HTMLButtonElement).disabled = true;
+
+  const removed: string[] = [];
+  let total = selected.length;
+
+  const onProgress = new Channel<UninstallProgressEvent>();
+  onProgress.onmessage = (event) => {
+    if (event.kind === "started") {
+      total = event.total;
+      setOperationProgress(true, 0, total, `Disinstallazione… 0 / ${total}`);
+      return;
+    }
+
+    if (event.kind === "item") {
+      setOperationProgress(
+        true,
+        event.current,
+        event.total,
+        `Disinstallazione… ${event.current} / ${event.total} — ${event.package_name}`,
+      );
+      if (event.status === "success") {
+        removed.push(event.package_name);
+        removePackageRow(event.package_name);
+      }
+      return;
+    }
+  };
 
   try {
-    const results = await invoke<{ package_name: string; status: string }[]>("bulk_uninstall", {
+    await invoke("bulk_uninstall", {
       req: { packages: selected, dry_run: false, serial: null },
+      on_progress: onProgress,
     });
-    lastRemoved = results.filter((r) => r.status === "success").map((r) => r.package_name);
+    lastRemoved = removed;
 
+    operationInFlight = false;
     await scanPackages();
     await refreshDbPanel();
     toast(`${lastRemoved.length} app rimosse.`, "success");
   } catch (e) {
     toast(`Errore disinstallazione: ${e}`, "error");
   } finally {
+    operationInFlight = false;
+    setOperationProgress(false, 0, 0, "");
+    setScanControlsDisabled(false);
     updateActionButtons();
   }
 }

@@ -296,6 +296,43 @@ body { margin: 0; min-height: 100vh; overflow: hidden; }
   position: relative;
 }
 
+.operation-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.65rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: #1a1d23;
+  border: 1px solid #2a2f38;
+  border-radius: 6px;
+}
+
+.operation-progress.hidden {
+  display: none;
+}
+
+.operation-progress-text {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #b8bec8;
+}
+
+.progress-track {
+  width: 100%;
+  height: 6px;
+  background: #2a2f38;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #3d7dd6, #5b9cf5);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
 .packages-loading {
   position: absolute;
   inset: 0;

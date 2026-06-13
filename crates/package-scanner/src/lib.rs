@@ -1,9 +1,11 @@
 use adb_bridge::{AdbBridge, PackageInfo};
 use axmldecoder::{Node, parse as parse_manifest};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use rayon::prelude::*;
+use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -24,6 +26,12 @@ pub struct ScannedPackage {
     pub is_device_admin: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum ScanProgress {
+    Started { total: usize },
+    Package(ScannedPackage),
+}
+
 #[derive(Debug, Clone, Default)]
 struct PlayMetadata {
     title: Option<String>,
@@ -31,34 +39,100 @@ struct PlayMetadata {
     icon_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct PackageDumpInfo {
+    installer: Option<String>,
+    signing_org: Option<String>,
+}
+
 pub struct PackageScanner {
-    bridge: AdbBridge,
-    play_cache: Mutex<HashMap<String, PlayMetadata>>,
+    bridge: Arc<Mutex<AdbBridge>>,
+    play_cache: Arc<Mutex<HashMap<String, PlayMetadata>>>,
+    http_client: Client,
 }
 
 impl PackageScanner {
     pub fn new(bridge: AdbBridge) -> Self {
+        let http_client = Client::builder()
+            .timeout(Duration::from_secs(8))
+            .user_agent("Mozilla/5.0 (compatible; AndroidAdwareCleaner/0.1)")
+            .build()
+            .expect("failed to build HTTP client");
         Self {
-            bridge,
-            play_cache: Mutex::new(HashMap::new()),
+            bridge: Arc::new(Mutex::new(bridge)),
+            play_cache: Arc::new(Mutex::new(HashMap::new())),
+            http_client,
         }
     }
 
     pub fn scan(&self, user_only: bool) -> Result<Vec<ScannedPackage>, ScanError> {
-        let packages = self.bridge.list_packages(user_only)?;
-        let admin_components = self.load_admin_packages()?;
-
-        let mut result = Vec::with_capacity(packages.len());
-        for pkg in packages {
-            let meta = self.enrich_package(&pkg, &admin_components);
-            result.push(meta);
-        }
-        Ok(result)
+        let mut results = Vec::new();
+        self.scan_with_progress(user_only, |event| {
+            if let ScanProgress::Package(pkg) = event {
+                results.push(pkg);
+            }
+        })?;
+        Ok(results)
     }
 
-    fn load_admin_packages(&self) -> Result<std::collections::HashSet<String>, ScanError> {
-        let output = self.bridge.shell("dumpsys device_policy").unwrap_or_default();
-        let mut admins = std::collections::HashSet::new();
+    pub fn scan_with_progress<F>(&self, user_only: bool, mut on_progress: F) -> Result<(), ScanError>
+    where
+        F: FnMut(ScanProgress) + Send + Sync,
+    {
+        let bridge = self.bridge.lock().map_err(|_| {
+            ScanError::Adb(adb_bridge::AdbError::CommandFailed(
+                "adb bridge lock poisoned".into(),
+            ))
+        })?;
+        let packages = bridge.list_packages(user_only)?;
+        drop(bridge);
+
+        let bulk_dumpsys = {
+            let bridge = self.bridge.lock().map_err(|_| {
+                ScanError::Adb(adb_bridge::AdbError::CommandFailed(
+                    "adb bridge lock poisoned".into(),
+                ))
+            })?;
+            bridge.shell("dumpsys package").unwrap_or_default()
+        };
+        let dump_info = parse_bulk_dumpsys(&bulk_dumpsys);
+        let admins = self.load_admin_packages()?;
+
+        let total = packages.len();
+        on_progress(ScanProgress::Started { total });
+
+        let on_progress = Arc::new(Mutex::new(on_progress));
+        let bridge = Arc::clone(&self.bridge);
+        let play_cache = Arc::clone(&self.play_cache);
+        let http_client = self.http_client.clone();
+        let dump_info = Arc::new(dump_info);
+        let admins = Arc::new(admins);
+
+        packages.par_iter().for_each(|pkg| {
+            let scanned = enrich_package(
+                &bridge,
+                &http_client,
+                &play_cache,
+                pkg,
+                &dump_info,
+                &admins,
+            );
+            if let Ok(mut cb) = on_progress.lock() {
+                cb(ScanProgress::Package(scanned));
+            }
+        });
+
+        Ok(())
+    }
+
+    fn load_admin_packages(&self) -> Result<HashSet<String>, ScanError> {
+        let bridge = self.bridge.lock().map_err(|_| {
+            ScanError::Adb(adb_bridge::AdbError::CommandFailed(
+                "adb bridge lock poisoned".into(),
+            ))
+        })?;
+        let output = bridge.shell("dumpsys device_policy").unwrap_or_default();
+        let mut admins = HashSet::new();
         for line in output.lines() {
             if line.contains("admin=ComponentInfo{") {
                 if let Some(start) = line.find('{') {
@@ -74,67 +148,148 @@ impl PackageScanner {
         }
         Ok(admins)
     }
+}
 
-    fn enrich_package(
-        &self,
-        pkg: &PackageInfo,
-        admins: &std::collections::HashSet<String>,
-    ) -> ScannedPackage {
-        let dumpsys = self
-            .bridge
-            .shell(&format!("dumpsys package {}", pkg.package_name))
-            .unwrap_or_default();
+fn enrich_package(
+    bridge: &Arc<Mutex<AdbBridge>>,
+    http_client: &Client,
+    play_cache: &Arc<Mutex<HashMap<String, PlayMetadata>>>,
+    pkg: &PackageInfo,
+    dump_info: &HashMap<String, PackageDumpInfo>,
+    admins: &HashSet<String>,
+) -> ScannedPackage {
+    let dumpsys_info = dump_info
+        .get(&pkg.package_name)
+        .cloned()
+        .unwrap_or_default();
+    let installer = dumpsys_info.installer.clone();
 
-        let installer = extract_installer(&dumpsys);
-        let manifest_label = fetch_manifest_bytes(&self.bridge, &pkg.package_name)
+    let manifest_label = {
+        let bridge = bridge.lock().ok();
+        bridge
+            .and_then(|b| fetch_manifest_bytes(&b, &pkg.package_name))
             .as_deref()
-            .and_then(extract_label_from_manifest);
-        let arsc_strings = fetch_arsc_strings(&self.bridge, &pkg.package_name);
-        let play = if pkg.is_system {
-            PlayMetadata::default()
-        } else {
-            self.play_metadata(&pkg.package_name)
+            .and_then(extract_label_from_manifest)
+    };
+
+    let play = if pkg.is_system {
+        PlayMetadata::default()
+    } else {
+        fetch_play_cached(http_client, play_cache, &pkg.package_name)
+    };
+
+    let mut label = manifest_label.or(play.title.clone());
+    if label.is_none() {
+        let arsc_strings = {
+            let bridge = bridge.lock().ok();
+            bridge
+                .map(|b| fetch_arsc_strings(&b, &pkg.package_name))
+                .unwrap_or_default()
         };
+        label = extract_label_from_arsc(&arsc_strings, &pkg.package_name);
+    }
+    let label = label.or_else(|| infer_label_from_package(&pkg.package_name));
 
-        let label = manifest_label
-            .or(play.title.clone())
-            .or_else(|| extract_label_from_arsc(&arsc_strings, &pkg.package_name))
-            .or_else(|| infer_label_from_package(&pkg.package_name));
+    let author = if pkg.is_system {
+        dumpsys_info.signing_org.clone()
+    } else {
+        play.developer
+            .clone()
+            .or(dumpsys_info.signing_org.clone())
+    };
 
-        let author = if pkg.is_system {
-            extract_signing_organization(&dumpsys)
-        } else {
-            play.developer
-                .clone()
-                .or_else(|| extract_signing_organization(&dumpsys))
-        };
+    let mut icon_url = play.icon_url.clone();
+    if icon_url.is_none() {
+        let bridge = bridge.lock().ok();
+        icon_url = bridge.and_then(|b| fetch_apk_icon_data_url(&b, &pkg.package_name));
+    }
 
-        let icon_url = play
-            .icon_url
-            .or_else(|| fetch_apk_icon_data_url(&self.bridge, &pkg.package_name));
+    ScannedPackage {
+        package_name: pkg.package_name.clone(),
+        label,
+        author,
+        icon_url,
+        is_system: pkg.is_system,
+        installer,
+        is_device_admin: admins.contains(&pkg.package_name),
+    }
+}
 
-        ScannedPackage {
-            package_name: pkg.package_name.clone(),
-            label,
-            author,
-            icon_url,
-            is_system: pkg.is_system,
-            installer,
-            is_device_admin: admins.contains(&pkg.package_name),
+fn parse_bulk_dumpsys(output: &str) -> HashMap<String, PackageDumpInfo> {
+    let mut map = HashMap::new();
+    let mut current_pkg: Option<String> = None;
+
+    for line in output.lines() {
+        if let Some(pkg) = parse_package_header(line) {
+            current_pkg = Some(pkg);
+            continue;
+        }
+        if let Some(ref pkg) = current_pkg {
+            let entry: &mut PackageDumpInfo = map.entry(pkg.clone()).or_default();
+            if entry.installer.is_none() {
+                if let Some(inst) = extract_installer_from_line(line) {
+                    entry.installer = Some(inst);
+                }
+            }
+            if line.contains("certificate DN:") || line.contains("Signer #") {
+                if let Some(org) = extract_signing_from_line(line) {
+                    if !is_generic_org(&org) {
+                        entry.signing_org = Some(org);
+                    }
+                }
+            }
         }
     }
 
-    fn play_metadata(&self, package_name: &str) -> PlayMetadata {
-        if let Some(cached) = self.play_cache.lock().unwrap().get(package_name) {
+    map
+}
+
+fn parse_package_header(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("Package [") {
+        return None;
+    }
+    let start = trimmed.find('[')? + 1;
+    let end = trimmed[start..].find(']')? + start;
+    let pkg = trimmed[start..end].trim();
+    if pkg.is_empty() {
+        None
+    } else {
+        Some(pkg.to_string())
+    }
+}
+
+fn extract_installer_from_line(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("installerPackageName=") {
+        return None;
+    }
+    trimmed
+        .split('=')
+        .nth(1)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "null")
+}
+
+fn extract_signing_from_line(line: &str) -> Option<String> {
+    extract_dn_field(line, "O=")
+}
+
+fn fetch_play_cached(
+    client: &Client,
+    cache: &Arc<Mutex<HashMap<String, PlayMetadata>>>,
+    package_name: &str,
+) -> PlayMetadata {
+    if let Ok(guard) = cache.lock() {
+        if let Some(cached) = guard.get(package_name) {
             return cached.clone();
         }
-        let meta = fetch_play_metadata(package_name).unwrap_or_default();
-        self.play_cache
-            .lock()
-            .unwrap()
-            .insert(package_name.to_string(), meta.clone());
-        meta
     }
+    let meta = fetch_play_metadata(client, package_name).unwrap_or_default();
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(package_name.to_string(), meta.clone());
+    }
+    meta
 }
 
 fn fetch_manifest_bytes(bridge: &AdbBridge, package_name: &str) -> Option<Vec<u8>> {
@@ -197,12 +352,7 @@ fn fetch_arsc_strings(bridge: &AdbBridge, package_name: &str) -> String {
     bridge.shell(&cmd).unwrap_or_default()
 }
 
-fn fetch_play_metadata(package_name: &str) -> Option<PlayMetadata> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .user_agent("Mozilla/5.0 (compatible; AndroidAdwareCleaner/0.1)")
-        .build()
-        .ok()?;
+fn fetch_play_metadata(client: &Client, package_name: &str) -> Option<PlayMetadata> {
     let url = format!(
         "https://play.google.com/store/apps/details?id={package_name}&hl=en"
     );
@@ -437,19 +587,7 @@ fn title_case_segment(segment: &str) -> String {
     }
 }
 
-fn extract_installer(text: &str) -> Option<String> {
-    for line in text.lines() {
-        if line.trim_start().starts_with("installerPackageName=") {
-            return line
-                .split('=')
-                .nth(1)
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty() && s != "null");
-        }
-    }
-    None
-}
-
+#[cfg(test)]
 fn extract_signing_organization(text: &str) -> Option<String> {
     for line in text.lines() {
         if line.contains("certificate DN:") || line.contains("Signer #") {
@@ -492,6 +630,27 @@ mod tests {
         assert_eq!(
             extract_signing_organization(dumpsys).as_deref(),
             Some("Meta Platforms Inc.")
+        );
+    }
+
+    #[test]
+    fn parses_bulk_dumpsys_sections() {
+        let output = r#"
+Package [com.example.app] (abc):
+    installerPackageName=com.android.vending
+    Signer #1 certificate DN: CN=App, O=Example Corp, C=US
+Package [com.other.app] (def):
+    installerPackageName=null
+"#;
+        let map = parse_bulk_dumpsys(output);
+        assert_eq!(
+            map.get("com.example.app").and_then(|i| i.installer.as_deref()),
+            Some("com.android.vending")
+        );
+        assert_eq!(
+            map.get("com.example.app")
+                .and_then(|i| i.signing_org.as_deref()),
+            Some("Example Corp")
         );
     }
 

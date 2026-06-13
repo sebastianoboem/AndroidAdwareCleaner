@@ -58,14 +58,13 @@
               <span class="flag-legend-item trusted">✓ Trusted</span>
             </div>
           </div>
-          <div class="table-wrap">
-            <div id="packages-loading" class="packages-loading hidden" aria-live="polite">
-              <div class="loader loader-sm" aria-hidden="true"></div>
-              <p class="loading-text">Caricamento app in corso…</p>
-              <p id="packages-loading-hint" class="loading-hint muted hidden">
-                Con le app di sistema può richiedere alcuni minuti.
-              </p>
+          <div id="operation-progress" class="operation-progress hidden" aria-live="polite">
+            <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+              <div id="progress-fill" class="progress-fill"></div>
             </div>
+            <p id="operation-progress-text" class="operation-progress-text">…</p>
+          </div>
+          <div class="table-wrap">
             <table id="packages-table">
               <thead>
                 <tr>
