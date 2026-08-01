@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adb-bridge"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -57,7 +57,7 @@ dependencies = [
 
 [[package]]
 name = "android-adware-cleaner"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "adb-bridge",
  "chrono",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "cloud-sync"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -2671,7 +2671,7 @@ dependencies = [
 
 [[package]]
 name = "package-scanner"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "adb-bridge",
  "axmldecoder",
@@ -3196,7 +3196,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "reputation-db"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "system-setup"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "adb-bridge",
  "serde",
@@ -4872,7 +4872,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "uninstall-engine"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "adb-bridge",
  "serde",
