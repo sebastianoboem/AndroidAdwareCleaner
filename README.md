@@ -37,13 +37,13 @@ Ogni riga ha tre flag:
 
 | Flag | Significato |
 |------|-------------|
-| 🚩 **Sospetta** | Segnala adware / app indesiderata nel database |
+| 🚩 **Sospetta** | Toggle: segna / togli adware o app indesiderata |
 | ⚙️ **Sistema** | Escludi dall’elenco (app di sistema) |
 | ✅ **Trusted** | App sicura — non compare tra le sospette |
 
 ![Screenshot di app segnate come sospette con badge arancioni e flag rosse attive.](/docs/screenshots/04-flags-suspicious.png)
 
-Le colonne **Rim.** e **Segn.** mostrano quante volte l’app è stata rimossa o segnalata nel database (locale + sync cloud).
+La colonna **Rim.** mostra quante volte l’app è stata rimossa nel database (locale + sync cloud). La flag sospetta è un semplice on/off.
 
 ### 4. Disinstalla in blocco
 

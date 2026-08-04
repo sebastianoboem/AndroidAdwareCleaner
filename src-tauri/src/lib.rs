@@ -25,7 +25,6 @@ pub fn run() {
             commands::sync_push,
             commands::scan_packages,
             commands::bulk_uninstall,
-            commands::report_package,
             commands::set_package_marks,
             commands::set_airplane_mode,
             commands::get_sync_status,

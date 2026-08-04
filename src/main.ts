@@ -49,6 +49,7 @@ interface PackageRow {
   report_count: number;
   marked_system: boolean;
   marked_trusted: boolean;
+  marked_suspicious: boolean;
   is_suspicious: boolean;
   is_reported: boolean;
 }
@@ -59,6 +60,7 @@ interface PackageReputation {
   report_count: number;
   marked_system: boolean;
   marked_trusted: boolean;
+  marked_suspicious: boolean;
 }
 
 const SUSPICIOUS_UNINSTALL_THRESHOLD = 5;
@@ -550,11 +552,29 @@ async function installPendingUpdate() {
   ($("#btn-update-later") as HTMLButtonElement).disabled = true;
   $("#update-progress")!.classList.remove("hidden");
 
+  let downloaded = 0;
+  let contentLength: number | undefined;
+
   try {
     await update.downloadAndInstall((event) => {
-      if (event.event === "Progress") {
-        const mb = (event.data.chunkLength / (1024 * 1024)).toFixed(1);
-        ($("#update-progress-text") as HTMLElement).textContent = `Download in corso… (+${mb} MB)`;
+      if (event.event === "Started") {
+        contentLength = event.data.contentLength ?? undefined;
+        downloaded = 0;
+        ($("#update-progress-text") as HTMLElement).textContent = "Download in corso…";
+      } else if (event.event === "Progress") {
+        downloaded += event.data.chunkLength;
+        const mb = (downloaded / (1024 * 1024)).toFixed(1);
+        if (contentLength && contentLength > 0) {
+          const pct = Math.min(100, Math.round((downloaded / contentLength) * 100));
+          const totalMb = (contentLength / (1024 * 1024)).toFixed(1);
+          ($("#update-progress-text") as HTMLElement).textContent =
+            `Download in corso… ${mb} / ${totalMb} MB (${pct}%)`;
+        } else {
+          ($("#update-progress-text") as HTMLElement).textContent =
+            `Download in corso… ${mb} MB`;
+        }
+      } else if (event.event === "Finished") {
+        ($("#update-progress-text") as HTMLElement).textContent = "Installazione…";
       }
     });
     await relaunch();
@@ -750,10 +770,9 @@ function buildPackageRowHtml(p: PackageRow): string {
         </div>
       </td>
       <td>${p.uninstall_count > 0 ? `<strong>${p.uninstall_count}×</strong>` : "—"}</td>
-      <td>${p.report_count > 0 ? `<strong>${p.report_count}×</strong>` : "—"}</td>
       <td class="col-flags">
-        <button type="button" class="btn-flag btn-flag-suspicious ${p.is_reported ? "active" : ""}"
-          data-package="${p.package_name}" title="Segnala sospetta/adware">⚑</button>
+        <button type="button" class="btn-flag btn-flag-suspicious ${p.marked_suspicious ? "active" : ""}"
+          data-package="${p.package_name}" title="${p.marked_suspicious ? "Rimuovi sospetta" : "Segna come sospetta/adware"}">⚑</button>
         <button type="button" class="btn-flag btn-flag-system ${p.marked_system ? "active" : ""}"
           data-package="${p.package_name}" title="Segna come app di sistema">⚙</button>
         <button type="button" class="btn-flag btn-flag-trusted ${p.marked_trusted ? "active" : ""}"
@@ -804,10 +823,6 @@ function renderTable() {
       case "uninstall_count":
         av = a.uninstall_count;
         bv = b.uninstall_count;
-        break;
-      case "report_count":
-        av = a.report_count;
-        bv = b.report_count;
         break;
       default:
         av = a.uninstall_count;
@@ -925,11 +940,12 @@ function applyReputationUpdate(rep: PackageReputation) {
   row.report_count = rep.report_count;
   row.marked_system = rep.marked_system;
   row.marked_trusted = rep.marked_trusted;
-  row.is_reported = rep.report_count > 0;
+  row.marked_suspicious = rep.marked_suspicious;
+  row.is_reported = rep.marked_suspicious;
   const whitelisted = row.marked_trusted || row.marked_system || row.is_system;
   row.is_suspicious =
     !whitelisted &&
-    (row.is_reported || row.uninstall_count > SUSPICIOUS_UNINSTALL_THRESHOLD);
+    (row.marked_suspicious || row.uninstall_count > SUSPICIOUS_UNINSTALL_THRESHOLD);
   updateScanInfo();
   renderTable();
 }
@@ -946,23 +962,9 @@ function flashDbActivity(label: string) {
   void refreshDbPanel();
 }
 
-async function reportRow(packageName: string) {
-  try {
-    const rep = await invoke<PackageReputation>("report_package", {
-      package_name: packageName,
-      reason: "Segnalata come sospetta/adware",
-      serial: deviceSerial || null,
-    });
-    applyReputationUpdate(rep);
-    flashDbActivity("Segnalazione salvata");
-  } catch (e) {
-    setDbActivity(`Errore: ${e}`, "err");
-  }
-}
-
 async function toggleMark(
   packageName: string,
-  field: "marked_system" | "marked_trusted",
+  field: "marked_system" | "marked_trusted" | "marked_suspicious",
   current: boolean
 ) {
   try {
@@ -978,9 +980,13 @@ async function toggleMark(
         ? !current
           ? "Segnata come sistema"
           : "Rimossa segnalazione sistema"
-        : !current
-          ? "Segnata come trusted"
-          : "Rimossa segnalazione trusted";
+        : field === "marked_trusted"
+          ? !current
+            ? "Segnata come trusted"
+            : "Rimossa segnalazione trusted"
+          : !current
+            ? "Segnata come sospetta"
+            : "Rimossa segnalazione sospetta";
     flashDbActivity(label);
   } catch (e) {
     setDbActivity(`Errore: ${e}`, "err");
@@ -1258,7 +1264,10 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     const pkg = t.dataset.package;
     if (!pkg) return;
-    if (t.classList.contains("btn-flag-suspicious")) reportRow(pkg);
+    if (t.classList.contains("btn-flag-suspicious")) {
+      const row = packages.find((p) => p.package_name === pkg);
+      toggleMark(pkg, "marked_suspicious", row?.marked_suspicious ?? false);
+    }
     if (t.classList.contains("btn-flag-system")) {
       const row = packages.find((p) => p.package_name === pkg);
       toggleMark(pkg, "marked_system", row?.marked_system ?? false);
@@ -1275,13 +1284,12 @@ window.addEventListener("DOMContentLoaded", () => {
       const map: Record<string, keyof PackageRow | "name"> = {
         name: "name",
         uninstall: "uninstall_count",
-        report: "report_count",
       };
       const newKey = map[key] ?? "name";
       if (sortKey === newKey) sortAsc = !sortAsc;
       else {
         sortKey = newKey;
-        sortAsc = key === "uninstall" || key === "report" ? false : true;
+        sortAsc = key === "uninstall" ? false : true;
       }
       renderTable();
     });

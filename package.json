@@ -1,7 +1,7 @@
 {
   "name": "android-adware-cleaner",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,8 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "bump-version": "node scripts/bump-version.mjs",
-    "release:manifest": "node scripts/generate-latest-json.mjs",
-    "release:sourceforge": "node scripts/publish-sourceforge-latest.mjs"
+    "release:manifest": "node scripts/generate-latest-json.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

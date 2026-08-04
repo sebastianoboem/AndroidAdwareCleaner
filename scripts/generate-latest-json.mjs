@@ -2,25 +2,19 @@
 /**
  * Genera latest.json per Tauri updater.
  *
- * Dual publish (SourceForge + GitHub): usa --base-url SourceForge così i
- * download/stats vanno su SF. Lo stesso file va caricato anche sulla GitHub
- * Release (fallback updater) e sul path stabile SF via
- * scripts/publish-sourceforge-latest.mjs.
+ * Pipeline: test locale → se OK → GitHub Release (vedi docs/RELEASE.md).
  *
- * Pattern artefatti SF (confermare al primo sync GitHub→SF):
- *   https://sourceforge.net/projects/androidadwarecleaner/files/releases/<tag>/<artifact>/download
- *
- * Esempio (SourceForge — preferito):
+ * Esempio (produzione — GitHub):
  *   node scripts/generate-latest-json.mjs \
- *     --version 0.2.0 \
+ *     --version 0.2.1 \
  *     --notes "Correzioni e miglioramenti" \
- *     --base-url https://sourceforge.net/projects/androidadwarecleaner/files/releases/v0.2.0 \
- *     --darwin-aarch64 target/release/bundle/macos/AndroidAdwareCleaner.app.tar.gz.sig \
- *     --darwin-x86_64 target/x86_64-apple-darwin/release/bundle/macos/AndroidAdwareCleaner.app.tar.gz.sig \
- *     --windows-x86_64 target/x86_64-pc-windows-msvc/release/bundle/nsis/AndroidAdwareCleaner_0.2.0_x64-setup.exe.sig
+ *     --base-url https://github.com/sebastianoboem/AndroidAdwareCleaner/releases/download/v0.2.1 \
+ *     --darwin-aarch64 path/to/AndroidAdwareCleaner_0.2.1_aarch64.app.tar.gz.sig \
+ *     --darwin-x86_64 path/to/AndroidAdwareCleaner_0.2.1_x64.app.tar.gz.sig \
+ *     --windows-x86_64 path/to/AndroidAdwareCleaner_0.2.1_x64-setup.exe.sig
  *
- * Esempio (GitHub only, legacy):
- *   ... --base-url https://github.com/sebastianoboem/AndroidAdwareCleaner/releases/download/v0.2.0
+ * Esempio (test locale):
+ *   ... --base-url http://127.0.0.1:8765
  */
 import { readFileSync, writeFileSync } from "node:fs";
 

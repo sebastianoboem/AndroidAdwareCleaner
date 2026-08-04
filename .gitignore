@@ -35,3 +35,10 @@ src-tauri/.tauri-signing.key
 
 # Screenshot grezzi (versione pubblicata in docs/screenshots/)
 .screenshots/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
+
+# Local updater staging / release artifacts (not committed)
+release/
+latest.json

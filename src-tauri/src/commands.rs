@@ -23,6 +23,7 @@ pub struct PackageRow {
     pub report_count: u64,
     pub marked_system: bool,
     pub marked_trusted: bool,
+    pub marked_suspicious: bool,
     pub is_suspicious: bool,
     pub is_reported: bool,
 }
@@ -279,10 +280,11 @@ fn package_to_row(
     let report_count = rep.map(|r| r.report_count).unwrap_or(0);
     let marked_system = rep.map(|r| r.marked_system).unwrap_or(false);
     let marked_trusted = rep.map(|r| r.marked_trusted).unwrap_or(false);
-    let is_reported = report_count > 0;
+    let marked_suspicious = rep.map(|r| r.marked_suspicious).unwrap_or(false);
+    let is_reported = marked_suspicious;
     let is_whitelisted = marked_trusted || marked_system || p.is_system;
     let is_suspicious =
-        !is_whitelisted && (is_reported || uninstall_count > SUSPICIOUS_THRESHOLD);
+        !is_whitelisted && (marked_suspicious || uninstall_count > SUSPICIOUS_THRESHOLD);
 
     PackageRow {
         package_name: p.package_name,
@@ -296,6 +298,7 @@ fn package_to_row(
         report_count,
         marked_system,
         marked_trusted,
+        marked_suspicious,
         is_suspicious,
         is_reported,
     }
@@ -373,34 +376,12 @@ pub async fn bulk_uninstall(
     Ok(())
 }
 
-#[tauri::command(rename_all = "snake_case")]
-pub fn report_package(
-    state: State<'_, AppState>,
-    package_name: String,
-    reason: Option<String>,
-    serial: Option<String>,
-) -> Result<PackageReputation, String> {
-    let bridge = match serial {
-        Some(s) => AdbBridge::with_serial(s).map_err(|e| e.to_string())?,
-        None => AdbBridge::new().map_err(|e| e.to_string())?,
-    };
-    let device_serial = bridge.get_serial().map_err(|e| e.to_string())?;
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    db.record_report(&package_name, &device_serial, reason.as_deref())
-        .map_err(|e| e.to_string())?;
-    let rep = db
-        .get_reputation(&package_name)
-        .map_err(|e| e.to_string())?;
-    drop(db);
-    push_db(&state)?;
-    Ok(rep)
-}
-
 #[derive(Debug, Deserialize)]
 pub struct SetPackageMarksRequest {
     pub package_name: String,
     pub marked_system: Option<bool>,
     pub marked_trusted: Option<bool>,
+    pub marked_suspicious: Option<bool>,
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -408,8 +389,11 @@ pub fn set_package_marks(
     state: State<'_, AppState>,
     req: SetPackageMarksRequest,
 ) -> Result<PackageReputation, String> {
-    if req.marked_system.is_none() && req.marked_trusted.is_none() {
-        return Err("specificare marked_system o marked_trusted".into());
+    if req.marked_system.is_none()
+        && req.marked_trusted.is_none()
+        && req.marked_suspicious.is_none()
+    {
+        return Err("specificare marked_system, marked_trusted o marked_suspicious".into());
     }
     let db = state.db.lock().map_err(|e| e.to_string())?;
     if let Some(value) = req.marked_system {
@@ -418,6 +402,10 @@ pub fn set_package_marks(
     }
     if let Some(value) = req.marked_trusted {
         db.set_marked_trusted(&req.package_name, value)
+            .map_err(|e| e.to_string())?;
+    }
+    if let Some(value) = req.marked_suspicious {
+        db.set_marked_suspicious(&req.package_name, value)
             .map_err(|e| e.to_string())?;
     }
     let rep = db

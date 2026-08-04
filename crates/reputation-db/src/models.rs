@@ -27,18 +27,21 @@ pub const SUSPICIOUS_UNINSTALL_THRESHOLD: u64 = 5;
 pub struct PackageReputation {
     pub package_name: String,
     pub uninstall_count: u64,
+    /// Legacy event count; suspicious flag uses `marked_suspicious` (bool).
     pub report_count: u64,
     #[serde(default)]
     pub marked_system: bool,
     #[serde(default)]
     pub marked_trusted: bool,
+    #[serde(default)]
+    pub marked_suspicious: bool,
 }
 
 impl PackageReputation {
     pub fn is_suspicious(&self) -> bool {
         !self.marked_trusted
             && !self.marked_system
-            && (self.report_count > 0 || self.uninstall_count > SUSPICIOUS_UNINSTALL_THRESHOLD)
+            && (self.marked_suspicious || self.uninstall_count > SUSPICIOUS_UNINSTALL_THRESHOLD)
     }
 }
 
@@ -47,6 +50,8 @@ pub struct PackageMark {
     pub package_name: String,
     pub marked_system: bool,
     pub marked_trusted: bool,
+    #[serde(default)]
+    pub marked_suspicious: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

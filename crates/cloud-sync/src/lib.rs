@@ -160,5 +160,7 @@ mod tests {
         sync.pull(&db2).unwrap();
         let rep = db2.get_reputation("com.bad.app").unwrap();
         assert_eq!(rep.report_count, 1);
+        assert!(rep.marked_suspicious);
+        assert!(rep.is_suspicious());
     }
 }
