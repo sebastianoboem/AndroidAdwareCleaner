@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 adb-bridge = { path = "../adb-bridge" }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 axmldecoder = "0.5.0"

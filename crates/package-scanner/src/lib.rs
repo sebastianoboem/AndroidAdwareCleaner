@@ -1,3 +1,7 @@
+mod cache;
+
+pub use cache::{CachedMetadata, MetadataCache};
+
 use adb_bridge::{AdbBridge, PackageInfo};
 use axmldecoder::{Node, parse as parse_manifest};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -5,6 +9,7 @@ use rayon::prelude::*;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
@@ -53,6 +58,7 @@ pub struct PackageScanner {
     bridge: Arc<AdbBridge>,
     play_cache: Arc<Mutex<HashMap<String, PlayMetadata>>>,
     http_client: Client,
+    cache_path: Option<PathBuf>,
 }
 
 impl PackageScanner {
@@ -66,7 +72,14 @@ impl PackageScanner {
             bridge: Arc::new(bridge),
             play_cache: Arc::new(Mutex::new(HashMap::new())),
             http_client,
+            cache_path: None,
         }
+    }
+
+    /// Enable the persistent metadata cache backed by the given JSON file.
+    pub fn with_cache_path(mut self, path: PathBuf) -> Self {
+        self.cache_path = Some(path);
+        self
     }
 
     pub fn scan(&self, user_only: bool) -> Result<Vec<ScannedPackage>, ScanError> {
@@ -92,6 +105,7 @@ impl PackageScanner {
         on_progress(ScanProgress::Started { total });
 
         let has_base64 = device_has_base64(&self.bridge);
+        let metadata_cache = Arc::new(Mutex::new(MetadataCache::load(self.cache_path.clone())));
 
         let on_progress = Arc::new(Mutex::new(on_progress));
         let bridge = Arc::clone(&self.bridge);
@@ -106,20 +120,57 @@ impl PackageScanner {
             .expect("failed to build scan thread pool");
         pool.install(|| {
             packages.par_iter().for_each(|pkg| {
-                let scanned = enrich_package(
-                    &bridge,
-                    &http_client,
-                    &play_cache,
-                    pkg,
-                    &dump_info,
-                    &admins,
-                    has_base64,
-                );
+                let cached = metadata_cache
+                    .lock()
+                    .ok()
+                    .and_then(|c| c.get(&pkg.package_name, pkg.apk_path.as_deref()).cloned());
+                let scanned = match cached {
+                    Some(hit) => ScannedPackage {
+                        package_name: pkg.package_name.clone(),
+                        label: hit.label,
+                        author: hit.author,
+                        icon_url: hit.icon_url,
+                        is_system: pkg.is_system,
+                        installer: dump_info
+                            .get(&pkg.package_name)
+                            .and_then(|i| i.installer.clone()),
+                        is_device_admin: admins.contains(&pkg.package_name),
+                    },
+                    None => {
+                        let scanned = enrich_package(
+                            &bridge,
+                            &http_client,
+                            &play_cache,
+                            pkg,
+                            &dump_info,
+                            &admins,
+                            has_base64,
+                        );
+                        if pkg.apk_path.is_some() {
+                            if let Ok(mut c) = metadata_cache.lock() {
+                                c.put(
+                                    &pkg.package_name,
+                                    CachedMetadata {
+                                        apk_path: pkg.apk_path.clone(),
+                                        label: scanned.label.clone(),
+                                        author: scanned.author.clone(),
+                                        icon_url: scanned.icon_url.clone(),
+                                    },
+                                );
+                            }
+                        }
+                        scanned
+                    }
+                };
                 if let Ok(mut cb) = on_progress.lock() {
                     cb(ScanProgress::Package(scanned));
                 }
             });
         });
+
+        if let Ok(c) = metadata_cache.lock() {
+            c.save();
+        }
 
         Ok(())
     }

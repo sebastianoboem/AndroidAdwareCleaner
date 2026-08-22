@@ -18,6 +18,7 @@ pub struct AppState {
     pub config: Mutex<AppConfig>,
     pub config_path: PathBuf,
     pub platform_tools_dir: PathBuf,
+    pub metadata_cache_path: PathBuf,
 }
 
 impl AppState {
@@ -45,6 +46,7 @@ impl AppState {
         let _ = cloud_sync.pull(&db);
 
         let platform_tools_dir = config_dir.join("platform-tools");
+        let metadata_cache_path = config_dir.join("metadata-cache.json");
         std::env::set_var(
             "ANDROID_ADWARE_PLATFORM_TOOLS",
             platform_tools_dir.to_string_lossy().as_ref(),
@@ -59,6 +61,7 @@ impl AppState {
             config: Mutex::new(config),
             config_path,
             platform_tools_dir,
+            metadata_cache_path,
         })
     }
 

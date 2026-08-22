@@ -214,6 +214,7 @@ fn scan_packages_streaming(
     user_only: bool,
     serial: Option<String>,
     reputations: std::collections::HashMap<String, PackageReputation>,
+    metadata_cache_path: std::path::PathBuf,
     on_progress: Channel<ScanProgressEvent>,
 ) -> Result<(), String> {
     let bridge = match serial {
@@ -224,7 +225,8 @@ fn scan_packages_streaming(
     let device_model = bridge.get_device_property("ro.product.model").ok();
     let device_brand = bridge.get_device_property("ro.product.brand").ok();
 
-    let scanner = package_scanner::PackageScanner::new(bridge);
+    let scanner =
+        package_scanner::PackageScanner::new(bridge).with_cache_path(metadata_cache_path);
     scanner
         .scan_with_progress(user_only, |event| match event {
             package_scanner::ScanProgress::Started { total } => {
@@ -262,8 +264,9 @@ pub async fn scan_packages(
             .collect()
     };
 
+    let metadata_cache_path = state.metadata_cache_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        scan_packages_streaming(user_only, serial, reputations, on_progress)
+        scan_packages_streaming(user_only, serial, reputations, metadata_cache_path, on_progress)
     })
     .await
     .map_err(|e| format!("scansione interrotta: {e}"))??;
