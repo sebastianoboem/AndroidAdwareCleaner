@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "bump-version": "node scripts/bump-version.mjs",
-    "release:manifest": "node scripts/generate-latest-json.mjs"
+    "release:manifest": "node scripts/generate-latest-json.mjs",
+    "test:unit": "node --test scripts/test-google-apps.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
