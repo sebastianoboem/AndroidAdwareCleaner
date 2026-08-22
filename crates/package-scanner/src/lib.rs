@@ -45,8 +45,12 @@ struct PackageDumpInfo {
     signing_org: Option<String>,
 }
 
+/// Enrichment is I/O-bound (adb round-trips and Play Store HTTP fetches), so
+/// the pool is larger than the CPU count; it also caps concurrent adb commands.
+const SCAN_THREADS: usize = 16;
+
 pub struct PackageScanner {
-    bridge: Arc<Mutex<AdbBridge>>,
+    bridge: Arc<AdbBridge>,
     play_cache: Arc<Mutex<HashMap<String, PlayMetadata>>>,
     http_client: Client,
 }
@@ -59,7 +63,7 @@ impl PackageScanner {
             .build()
             .expect("failed to build HTTP client");
         Self {
-            bridge: Arc::new(Mutex::new(bridge)),
+            bridge: Arc::new(bridge),
             play_cache: Arc::new(Mutex::new(HashMap::new())),
             http_client,
         }
@@ -79,22 +83,8 @@ impl PackageScanner {
     where
         F: FnMut(ScanProgress) + Send + Sync,
     {
-        let bridge = self.bridge.lock().map_err(|_| {
-            ScanError::Adb(adb_bridge::AdbError::CommandFailed(
-                "adb bridge lock poisoned".into(),
-            ))
-        })?;
-        let packages = bridge.list_packages(user_only)?;
-        drop(bridge);
-
-        let bulk_dumpsys = {
-            let bridge = self.bridge.lock().map_err(|_| {
-                ScanError::Adb(adb_bridge::AdbError::CommandFailed(
-                    "adb bridge lock poisoned".into(),
-                ))
-            })?;
-            bridge.shell("dumpsys package").unwrap_or_default()
-        };
+        let packages = self.bridge.list_packages(user_only)?;
+        let bulk_dumpsys = self.bridge.shell("dumpsys package").unwrap_or_default();
         let dump_info = parse_bulk_dumpsys(&bulk_dumpsys);
         let admins = self.load_admin_packages()?;
 
@@ -108,30 +98,31 @@ impl PackageScanner {
         let dump_info = Arc::new(dump_info);
         let admins = Arc::new(admins);
 
-        packages.par_iter().for_each(|pkg| {
-            let scanned = enrich_package(
-                &bridge,
-                &http_client,
-                &play_cache,
-                pkg,
-                &dump_info,
-                &admins,
-            );
-            if let Ok(mut cb) = on_progress.lock() {
-                cb(ScanProgress::Package(scanned));
-            }
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(SCAN_THREADS)
+            .build()
+            .expect("failed to build scan thread pool");
+        pool.install(|| {
+            packages.par_iter().for_each(|pkg| {
+                let scanned = enrich_package(
+                    &bridge,
+                    &http_client,
+                    &play_cache,
+                    pkg,
+                    &dump_info,
+                    &admins,
+                );
+                if let Ok(mut cb) = on_progress.lock() {
+                    cb(ScanProgress::Package(scanned));
+                }
+            });
         });
 
         Ok(())
     }
 
     fn load_admin_packages(&self) -> Result<HashSet<String>, ScanError> {
-        let bridge = self.bridge.lock().map_err(|_| {
-            ScanError::Adb(adb_bridge::AdbError::CommandFailed(
-                "adb bridge lock poisoned".into(),
-            ))
-        })?;
-        let output = bridge.shell("dumpsys device_policy").unwrap_or_default();
+        let output = self.bridge.shell("dumpsys device_policy").unwrap_or_default();
         let mut admins = HashSet::new();
         for line in output.lines() {
             if line.contains("admin=ComponentInfo{") {
@@ -151,7 +142,7 @@ impl PackageScanner {
 }
 
 fn enrich_package(
-    bridge: &Arc<Mutex<AdbBridge>>,
+    bridge: &AdbBridge,
     http_client: &Client,
     play_cache: &Arc<Mutex<HashMap<String, PlayMetadata>>>,
     pkg: &PackageInfo,
@@ -164,13 +155,9 @@ fn enrich_package(
         .unwrap_or_default();
     let installer = dumpsys_info.installer.clone();
 
-    let manifest_label = {
-        let bridge = bridge.lock().ok();
-        bridge
-            .and_then(|b| fetch_manifest_bytes(&b, &pkg.package_name))
-            .as_deref()
-            .and_then(extract_label_from_manifest)
-    };
+    let manifest_label = fetch_manifest_bytes(bridge, &pkg.package_name)
+        .as_deref()
+        .and_then(extract_label_from_manifest);
 
     let play = if pkg.is_system {
         PlayMetadata::default()
@@ -180,12 +167,7 @@ fn enrich_package(
 
     let mut label = manifest_label.or(play.title.clone());
     if label.is_none() {
-        let arsc_strings = {
-            let bridge = bridge.lock().ok();
-            bridge
-                .map(|b| fetch_arsc_strings(&b, &pkg.package_name))
-                .unwrap_or_default()
-        };
+        let arsc_strings = fetch_arsc_strings(bridge, &pkg.package_name);
         label = extract_label_from_arsc(&arsc_strings, &pkg.package_name);
     }
     let label = label.or_else(|| infer_label_from_package(&pkg.package_name));
@@ -200,8 +182,7 @@ fn enrich_package(
 
     let mut icon_url = play.icon_url.clone();
     if icon_url.is_none() {
-        let bridge = bridge.lock().ok();
-        icon_url = bridge.and_then(|b| fetch_apk_icon_data_url(&b, &pkg.package_name));
+        icon_url = fetch_apk_icon_data_url(bridge, &pkg.package_name);
     }
 
     ScannedPackage {
