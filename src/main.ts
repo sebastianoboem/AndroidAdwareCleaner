@@ -652,15 +652,34 @@ function escapeHtml(s: string) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+const ICON_FALLBACK_HTML = `<span class="pkg-icon pkg-icon-fallback" aria-hidden="true">📦</span>`;
+
 function packageIconHtml(iconUrl: string | null): string {
   if (
     !iconUrl ||
     (!iconUrl.startsWith("https://") && !iconUrl.startsWith("data:image/"))
   ) {
-    return `<span class="pkg-icon pkg-icon-fallback" aria-hidden="true">📦</span>`;
+    return ICON_FALLBACK_HTML;
   }
   const safe = iconUrl.replace(/"/g, "&quot;");
   return `<img class="pkg-icon" src="${safe}" alt="" loading="lazy" decoding="async" />`;
+}
+
+// Le icone arrivano da URL Play Store o data-URL: se il caricamento fallisce
+// (rete assente, throttling, app rimossa dallo store) mostra il placeholder
+// invece del glifo di immagine rotta. Gli eventi error non fanno bubbling,
+// quindi serve un listener in fase di capture.
+function installIconErrorFallback() {
+  document.addEventListener(
+    "error",
+    (e) => {
+      const target = e.target;
+      if (target instanceof HTMLImageElement && target.classList.contains("pkg-icon")) {
+        target.outerHTML = ICON_FALLBACK_HTML;
+      }
+    },
+    true,
+  );
 }
 
 function getSelectedPackages(): string[] {
@@ -1175,6 +1194,7 @@ async function boot() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  installIconErrorFallback();
   boot();
 
   $("#conn-brand")?.addEventListener("change", () => void renderConnectionGuideInDialog());
