@@ -27,7 +27,7 @@
 **Interfaces:**
 - Produces: `select_serial(devices: &[AdbDevice], want: Option<&str>) -> Result<String, AdbError>`; `AdbBridge.resolved_serial: OnceLock<String>`; `get_serial()` resolves once per bridge instance.
 
-- [ ] **Step 1: Write failing tests** (in `mod tests` of `bridge.rs`)
+- [x] **Step 1: Write failing tests** (in `mod tests` of `bridge.rs`)
 
 ```rust
 fn dev(serial: &str, state: DeviceState) -> AdbDevice {
@@ -65,9 +65,9 @@ fn select_serial_errors_on_multiple_authorized() {
 }
 ```
 
-- [ ] **Step 2: Run tests, verify they fail** — `cargo test -p adb-bridge` → compile error: `select_serial` not found.
+- [x] **Step 2: Run tests, verify they fail** — `cargo test -p adb-bridge` → compile error: `select_serial` not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add `use std::sync::OnceLock;`. Extract selection from `get_serial` into a free function:
 
@@ -113,8 +113,8 @@ pub fn get_serial(&self) -> Result<String, AdbError> {
 }
 ```
 
-- [ ] **Step 4: Run tests, verify pass** — `cargo test -p adb-bridge` → all green.
-- [ ] **Step 5: Commit** — `git commit -m "Cache resolved adb serial per bridge instance."`
+- [x] **Step 4: Run tests, verify pass** — `cargo test -p adb-bridge` → all green.
+- [x] **Step 5: Commit** — `git commit -m "Cache resolved adb serial per bridge instance."`
 
 ---
 
@@ -127,7 +127,7 @@ pub fn get_serial(&self) -> Result<String, AdbError> {
 **Interfaces:**
 - Produces: `parse_package_line(line: &str) -> Option<(String, Option<String>)>` (name, apk_path); `PackageInfo.apk_path: Option<String>`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```rust
 #[test]
@@ -150,9 +150,9 @@ fn rejects_non_package_lines() {
 }
 ```
 
-- [ ] **Step 2: Run, verify fail** — compile error: `parse_package_line` not found.
+- [x] **Step 2: Run, verify fail** — compile error: `parse_package_line` not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```rust
 fn parse_package_line(line: &str) -> Option<(String, Option<String>)> {
@@ -175,8 +175,8 @@ fn parse_package_line(line: &str) -> Option<(String, Option<String>)> {
 
 `PackageInfo` gains `pub apk_path: Option<String>`. `list_packages` adds `-f` to both invocations and builds entries via `parse_package_line`; the `-s` system set still collects names only.
 
-- [ ] **Step 4: Run, verify pass** — `cargo test --workspace` (scanner compiles against new field).
-- [ ] **Step 5: Commit** — `git commit -m "Fetch APK paths in bulk via pm list packages -f."`
+- [x] **Step 4: Run, verify pass** — `cargo test --workspace` (scanner compiles against new field).
+- [x] **Step 5: Commit** — `git commit -m "Fetch APK paths in bulk via pm list packages -f."`
 
 ---
 
@@ -190,7 +190,7 @@ fn parse_package_line(line: &str) -> Option<(String, Option<String>)> {
 
 Pure refactor: no behavior change, existing tests must stay green (TDD refactor phase).
 
-- [ ] **Step 1: Refactor**
+- [x] **Step 1: Refactor**
   - `bridge: Arc<Mutex<AdbBridge>>` → `Arc<AdbBridge>`; drop all `bridge.lock()` sites (call methods directly).
   - `scan_with_progress` runs the per-package loop inside a dedicated pool:
 
@@ -206,8 +206,8 @@ pool.install(|| {
 });
 ```
 
-- [ ] **Step 2: Verify green** — `cargo test --workspace`.
-- [ ] **Step 3: Commit** — `git commit -m "Run per-package adb enrichment in parallel."`
+- [x] **Step 2: Verify green** — `cargo test --workspace`.
+- [x] **Step 3: Commit** — `git commit -m "Run per-package adb enrichment in parallel."`
 
 ---
 
@@ -219,7 +219,7 @@ pool.install(|| {
 **Interfaces:**
 - Produces: `parse_manifest_icon_output(text: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>)`; `fetch_manifest_and_icon(bridge, apk_path) -> (Option<Vec<u8>>, Option<Vec<u8>>)`; `device_has_base64(bridge) -> bool`; arsc scripts capped with `| head -c 262144`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```rust
 #[test]
@@ -254,9 +254,9 @@ fn merged_output_empty_yields_none() {
 }
 ```
 
-- [ ] **Step 2: Run, verify fail** — compile error: `parse_manifest_icon_output` not found.
+- [x] **Step 2: Run, verify fail** — compile error: `parse_manifest_icon_output` not found.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```rust
 fn parse_manifest_icon_output(text: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
@@ -313,8 +313,8 @@ fn device_has_base64(bridge: &AdbBridge) -> bool {
 
 `scan_with_progress` probes `device_has_base64` once. `enrich_package` uses the merged fetch when the probe succeeded and `apk_path` is `Some`; otherwise it keeps today's separate `fetch_manifest_bytes` / `fetch_apk_icon_data_url` (which now take the apk path when known and only fall back to `pm path` when it is `None`). Icon precedence unchanged: Play icon first for non-system, else apk icon bytes → data URL. Arsc scripts (both variants) get `| head -c 262144` after `strings`.
 
-- [ ] **Step 4: Run, verify pass** — `cargo test --workspace`.
-- [ ] **Step 5: Commit** — `git commit -m "Merge manifest and icon extraction into one exec-out."`
+- [x] **Step 4: Run, verify pass** — `cargo test --workspace`.
+- [x] **Step 5: Commit** — `git commit -m "Merge manifest and icon extraction into one exec-out."`
 
 ---
 
@@ -329,7 +329,7 @@ fn device_has_base64(bridge: &AdbBridge) -> bool {
 - Consumes: `PackageInfo.apk_path` (Task 2).
 - Produces: `MetadataCache::{load, get, put, save}`, `CachedMetadata`; `PackageScanner::with_cache_path(PathBuf)`; `AppState.metadata_cache_path: PathBuf`.
 
-- [ ] **Step 1: Write failing tests** (in `cache.rs`)
+- [x] **Step 1: Write failing tests** (in `cache.rs`)
 
 ```rust
 fn temp_cache_path(tag: &str) -> std::path::PathBuf {
@@ -374,9 +374,9 @@ fn cache_never_hits_without_current_apk_path() {
 }
 ```
 
-- [ ] **Step 2: Run, verify fail** — compile error: module/types not found.
+- [x] **Step 2: Run, verify fail** — compile error: module/types not found.
 
-- [ ] **Step 3: Implement `cache.rs`**
+- [x] **Step 3: Implement `cache.rs`**
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -430,9 +430,9 @@ impl MetadataCache {
 
 Add `serde_json = { workspace = true }` to `crates/package-scanner/Cargo.toml`, `mod cache;` + `pub use cache::{CachedMetadata, MetadataCache};` in `lib.rs`.
 
-- [ ] **Step 4: Run, verify pass** — `cargo test -p package-scanner`.
+- [x] **Step 4: Run, verify pass** — `cargo test -p package-scanner`.
 
-- [ ] **Step 5: Integrate into scanner and Tauri**
+- [x] **Step 5: Integrate into scanner and Tauri**
 
 `PackageScanner` gains `cache_path: Option<PathBuf>` (default `None`) and:
 
@@ -449,13 +449,13 @@ In `scan_with_progress`: load the cache before the loop, share as `Arc<Mutex<Met
 
 `src-tauri/src/commands.rs`: `scan_packages` clones `state.metadata_cache_path` before `spawn_blocking`, passes it through `scan_packages_streaming` into `PackageScanner::new(bridge).with_cache_path(cache_path)`.
 
-- [ ] **Step 6: Run, verify pass** — `cargo test --workspace`.
-- [ ] **Step 7: Commit** — `git commit -m "Add persistent package metadata cache across scans."`
+- [x] **Step 6: Run, verify pass** — `cargo test --workspace`.
+- [x] **Step 7: Commit** — `git commit -m "Add persistent package metadata cache across scans."`
 
 ---
 
 ### Final verification
 
-- [ ] `cargo test --workspace` — all green.
-- [ ] `cargo build --workspace` (or `cargo check`) — no warnings introduced.
-- [ ] `graft build` to refresh the context graph.
+- [x] `cargo test --workspace` — all green.
+- [x] `cargo build --workspace` (or `cargo check`) — no warnings introduced.
+- [x] `graft build` to refresh the context graph.
