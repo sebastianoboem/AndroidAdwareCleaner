@@ -44,6 +44,7 @@ pub struct AdbDevice {
 pub struct PackageInfo {
     pub package_name: String,
     pub is_system: bool,
+    pub apk_path: Option<String>,
 }
 
 pub struct AdbBridge {
@@ -137,17 +138,18 @@ impl AdbBridge {
     pub fn list_packages(&self, user_only: bool) -> Result<Vec<PackageInfo>, AdbError> {
         let serial = self.get_serial()?;
         let args: Vec<&str> = if user_only {
-            vec!["-s", &serial, "shell", "pm", "list", "packages", "-3"]
+            vec!["-s", &serial, "shell", "pm", "list", "packages", "-f", "-3"]
         } else {
-            vec!["-s", &serial, "shell", "pm", "list", "packages"]
+            vec!["-s", &serial, "shell", "pm", "list", "packages", "-f"]
         };
         let output = self.run_adb(&args)?;
         let mut packages: Vec<PackageInfo> = output
             .lines()
-            .filter_map(|line| line.strip_prefix("package:"))
-            .map(|name| PackageInfo {
-                package_name: name.trim().to_string(),
+            .filter_map(parse_package_line)
+            .map(|(package_name, apk_path)| PackageInfo {
+                package_name,
                 is_system: false,
+                apk_path,
             })
             .collect();
 
@@ -163,9 +165,7 @@ impl AdbBridge {
             ])?;
             let system: std::collections::HashSet<String> = sys_out
                 .lines()
-                .filter_map(|l| l.strip_prefix("package:"))
-                .map(str::trim)
-                .map(str::to_string)
+                .filter_map(|l| parse_package_line(l).map(|(name, _)| name))
                 .collect();
             for pkg in &mut packages {
                 pkg.is_system = system.contains(&pkg.package_name);
@@ -292,6 +292,25 @@ impl AdbBridge {
     }
 }
 
+fn parse_package_line(line: &str) -> Option<(String, Option<String>)> {
+    let rest = line.trim().strip_prefix("package:")?;
+    if rest.is_empty() {
+        return None;
+    }
+    // With `-f` the line is `package:<apk-path>=<name>`; paths may contain `=`
+    // (base64 directory names), so split at the last `=`.
+    match rest.rfind('=') {
+        Some(idx) => {
+            let name = rest[idx + 1..].trim();
+            if name.is_empty() {
+                return None;
+            }
+            Some((name.to_string(), Some(rest[..idx].trim().to_string())))
+        }
+        None => Some((rest.trim().to_string(), None)),
+    }
+}
+
 fn select_serial(devices: &[AdbDevice], want: Option<&str>) -> Result<String, AdbError> {
     if let Some(s) = want {
         if devices.iter().any(|d| d.serial == s) {
@@ -383,6 +402,31 @@ mod tests {
             select_serial(&devices, None),
             Err(AdbError::CommandFailed(_))
         ));
+    }
+
+    #[test]
+    fn parses_package_line_with_path() {
+        assert_eq!(
+            parse_package_line("package:/data/app/~~Xq==/com.foo-Yz==/base.apk=com.foo"),
+            Some((
+                "com.foo".into(),
+                Some("/data/app/~~Xq==/com.foo-Yz==/base.apk".into())
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_package_line_without_path() {
+        assert_eq!(
+            parse_package_line("package:com.foo"),
+            Some(("com.foo".into(), None))
+        );
+    }
+
+    #[test]
+    fn rejects_non_package_lines() {
+        assert_eq!(parse_package_line(""), None);
+        assert_eq!(parse_package_line("package:"), None);
     }
 
     #[test]
