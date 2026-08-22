@@ -3,6 +3,7 @@ use crate::resolver::resolve_adb_path;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -48,12 +49,17 @@ pub struct PackageInfo {
 pub struct AdbBridge {
     adb: PathBuf,
     serial: Option<String>,
+    resolved_serial: OnceLock<String>,
 }
 
 impl AdbBridge {
     pub fn new() -> Result<Self, AdbError> {
         let adb = resolve_adb_path().ok_or(AdbError::BinaryNotFound)?;
-        Ok(Self { adb, serial: None })
+        Ok(Self {
+            adb,
+            serial: None,
+            resolved_serial: OnceLock::new(),
+        })
     }
 
     pub fn with_serial(serial: impl Into<String>) -> Result<Self, AdbError> {
@@ -119,30 +125,13 @@ impl AdbBridge {
     }
 
     pub fn get_serial(&self) -> Result<String, AdbError> {
-        if let Some(s) = &self.serial {
-            let devices = self.list_devices()?;
-            if devices.iter().any(|d| d.serial == *s) {
-                return Ok(s.clone());
-            }
-            return Err(AdbError::NoDevice);
+        if let Some(s) = self.resolved_serial.get() {
+            return Ok(s.clone());
         }
         let devices = self.list_devices()?;
-        let authorized: Vec<_> = devices
-            .iter()
-            .filter(|d| d.state == DeviceState::Device)
-            .collect();
-        match authorized.len() {
-            0 => {
-                if devices.iter().any(|d| d.state == DeviceState::Unauthorized) {
-                    return Err(AdbError::Unauthorized);
-                }
-                Err(AdbError::NoDevice)
-            }
-            1 => Ok(authorized[0].serial.clone()),
-            _ => Err(AdbError::CommandFailed(
-                "multiple devices connected; specify serial".into(),
-            )),
-        }
+        let serial = select_serial(&devices, self.serial.as_deref())?;
+        let _ = self.resolved_serial.set(serial.clone());
+        Ok(serial)
     }
 
     pub fn list_packages(&self, user_only: bool) -> Result<Vec<PackageInfo>, AdbError> {
@@ -303,6 +292,31 @@ impl AdbBridge {
     }
 }
 
+fn select_serial(devices: &[AdbDevice], want: Option<&str>) -> Result<String, AdbError> {
+    if let Some(s) = want {
+        if devices.iter().any(|d| d.serial == s) {
+            return Ok(s.to_string());
+        }
+        return Err(AdbError::NoDevice);
+    }
+    let authorized: Vec<_> = devices
+        .iter()
+        .filter(|d| d.state == DeviceState::Device)
+        .collect();
+    match authorized.len() {
+        0 => {
+            if devices.iter().any(|d| d.state == DeviceState::Unauthorized) {
+                return Err(AdbError::Unauthorized);
+            }
+            Err(AdbError::NoDevice)
+        }
+        1 => Ok(authorized[0].serial.clone()),
+        _ => Err(AdbError::CommandFailed(
+            "multiple devices connected; specify serial".into(),
+        )),
+    }
+}
+
 fn pick_best_from_list(devices: &[AdbDevice]) -> Option<AdbDevice> {
     for state in [
         DeviceState::Device,
@@ -319,6 +333,57 @@ fn pick_best_from_list(devices: &[AdbDevice]) -> Option<AdbDevice> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dev(serial: &str, state: DeviceState) -> AdbDevice {
+        AdbDevice {
+            serial: serial.into(),
+            state,
+            model: None,
+            product: None,
+        }
+    }
+
+    #[test]
+    fn select_serial_returns_explicit_serial_when_listed() {
+        let devices = vec![dev("abc", DeviceState::Unauthorized)];
+        assert_eq!(select_serial(&devices, Some("abc")).unwrap(), "abc");
+    }
+
+    #[test]
+    fn select_serial_errors_when_explicit_serial_missing() {
+        let devices = vec![dev("other", DeviceState::Device)];
+        assert!(matches!(
+            select_serial(&devices, Some("abc")),
+            Err(AdbError::NoDevice)
+        ));
+    }
+
+    #[test]
+    fn select_serial_picks_single_authorized_device() {
+        let devices = vec![
+            dev("un1", DeviceState::Unauthorized),
+            dev("ok1", DeviceState::Device),
+        ];
+        assert_eq!(select_serial(&devices, None).unwrap(), "ok1");
+    }
+
+    #[test]
+    fn select_serial_reports_unauthorized_when_no_authorized() {
+        let devices = vec![dev("un1", DeviceState::Unauthorized)];
+        assert!(matches!(
+            select_serial(&devices, None),
+            Err(AdbError::Unauthorized)
+        ));
+    }
+
+    #[test]
+    fn select_serial_errors_on_multiple_authorized() {
+        let devices = vec![dev("a", DeviceState::Device), dev("b", DeviceState::Device)];
+        assert!(matches!(
+            select_serial(&devices, None),
+            Err(AdbError::CommandFailed(_))
+        ));
+    }
 
     #[test]
     fn pick_prefers_authorized_device() {
