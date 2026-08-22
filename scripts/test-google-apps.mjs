@@ -24,4 +24,10 @@ describe("isGoogleApp", () => {
     assert.equal(isGoogleApp("com.google"), false);
     assert.equal(isGoogleApp("com.google.android"), false);
   });
+
+  it("rejects non-string package names", () => {
+    assert.equal(isGoogleApp(null), false);
+    assert.equal(isGoogleApp(undefined), false);
+    assert.equal(isGoogleApp(42), false);
+  });
 });

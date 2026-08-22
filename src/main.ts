@@ -1,9 +1,10 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { isGoogleApp } from "./googleApps.mjs";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+
+import { isGoogleApp } from "./googleApps.mjs";
 
 // --- Types ---
 
@@ -687,19 +688,21 @@ function updateSelectAllState() {
   el.indeterminate = checkedCount > 0 && checkedCount < visible.length;
 }
 
-function getFilteredPackages(): PackageRow[] {
+function packagePassesFilters(p: PackageRow): boolean {
   const filter = ($("#filter-text") as HTMLInputElement).value.toLowerCase();
   const hideSystem = ($("#hide-system") as HTMLInputElement).checked;
   const hideGoogle = ($("#hide-google") as HTMLInputElement).checked;
   const onlySuspicious = ($("#filter-suspicious") as HTMLInputElement).checked;
 
-  return packages.filter((p) => {
-    if (hideSystem && (p.is_system || p.marked_system)) return false;
-    if (hideGoogle && isGoogleApp(p.package_name)) return false;
-    if (onlySuspicious && !p.is_suspicious) return false;
-    const hay = `${p.package_name} ${p.label ?? ""} ${p.author ?? ""}`.toLowerCase();
-    return hay.includes(filter);
-  });
+  if (hideSystem && (p.is_system || p.marked_system)) return false;
+  if (hideGoogle && isGoogleApp(p.package_name)) return false;
+  if (onlySuspicious && !p.is_suspicious) return false;
+  const hay = `${p.package_name} ${p.label ?? ""} ${p.author ?? ""}`.toLowerCase();
+  return hay.includes(filter);
+}
+
+function getFilteredPackages(): PackageRow[] {
+  return packages.filter(packagePassesFilters);
 }
 
 function setOperationProgress(
@@ -785,6 +788,7 @@ function buildPackageRowHtml(p: PackageRow): string {
 }
 
 function appendPackageRow(p: PackageRow) {
+  if (!packagePassesFilters(p)) return;
   const tbody = $("#packages-body");
   if (!tbody) return;
   tbody.insertAdjacentHTML("beforeend", buildPackageRowHtml(p));
