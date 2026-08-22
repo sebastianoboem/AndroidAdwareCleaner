@@ -10,6 +10,10 @@ pub struct CachedMetadata {
     pub label: Option<String>,
     pub author: Option<String>,
     pub icon_url: Option<String>,
+    /// Old entries default to false and are treated as a miss so they can be
+    /// re-enriched after label/icon quality fixes.
+    #[serde(default)]
+    pub complete: bool,
 }
 
 pub struct MetadataCache {
@@ -34,9 +38,9 @@ impl MetadataCache {
 
     pub fn get(&self, package: &str, apk_path: Option<&str>) -> Option<&CachedMetadata> {
         let current = apk_path?;
-        self.entries
-            .get(package)
-            .filter(|e| e.apk_path.as_deref() == Some(current))
+        self.entries.get(package).filter(|e| {
+            e.complete && e.apk_path.as_deref() == Some(current)
+        })
     }
 
     pub fn put(&mut self, package: &str, entry: CachedMetadata) {
@@ -77,6 +81,7 @@ mod tests {
                 label: Some("Foo".into()),
                 author: Some("Foo Inc".into()),
                 icon_url: None,
+                complete: true,
             },
         );
         cache.save();
@@ -99,6 +104,7 @@ mod tests {
                 label: Some("Foo".into()),
                 author: None,
                 icon_url: None,
+                complete: true,
             },
         );
         assert!(cache.get("com.foo", Some("/new/base.apk")).is_none());
@@ -114,8 +120,25 @@ mod tests {
                 label: Some("Foo".into()),
                 author: None,
                 icon_url: None,
+                complete: true,
             },
         );
         assert!(cache.get("com.foo", None).is_none());
+    }
+
+    #[test]
+    fn cache_misses_incomplete_legacy_entries() {
+        let mut cache = MetadataCache::load(None);
+        cache.put(
+            "com.foo",
+            CachedMetadata {
+                apk_path: Some("/data/app/x/base.apk".into()),
+                label: Some("Google".into()),
+                author: None,
+                icon_url: None,
+                complete: false,
+            },
+        );
+        assert!(cache.get("com.foo", Some("/data/app/x/base.apk")).is_none());
     }
 }

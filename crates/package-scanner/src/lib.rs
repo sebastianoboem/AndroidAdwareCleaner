@@ -155,6 +155,7 @@ impl PackageScanner {
                                         label: scanned.label.clone(),
                                         author: scanned.author.clone(),
                                         icon_url: scanned.icon_url.clone(),
+                                        complete: true,
                                     },
                                 );
                             }
@@ -226,23 +227,25 @@ fn enrich_package(
     };
     let manifest_label = manifest_bytes.as_deref().and_then(extract_label_from_manifest);
 
-    let play = if pkg.is_system {
-        PlayMetadata::default()
-    } else {
+    let play = if should_fetch_play(pkg) {
         fetch_play_cached(http_client, play_cache, &pkg.package_name)
+    } else {
+        PlayMetadata::default()
     };
 
-    let label = known_label(&pkg.package_name)
-        .or(manifest_label)
-        .or(play.title.clone());
-    let mut label = label;
+    let mut label = play
+        .title
+        .clone()
+        .or_else(|| known_label(&pkg.package_name))
+        .or_else(|| manifest_label.filter(|l| !is_weak_label(l)));
     if label.is_none() {
         let arsc_strings = fetch_arsc_strings(bridge, &pkg.package_name, pkg.apk_path.as_deref());
-        label = extract_label_from_arsc(&arsc_strings, &pkg.package_name);
+        label = extract_label_from_arsc(&arsc_strings, &pkg.package_name)
+            .filter(|l| !is_weak_label(l));
     }
     let label = label.or_else(|| infer_label_from_package(&pkg.package_name));
 
-    let author = if pkg.is_system {
+    let author = if pkg.is_system && play.developer.is_none() {
         dumpsys_info.signing_org.clone()
     } else {
         play.developer
@@ -392,7 +395,7 @@ fn fetch_manifest_and_icon(
     let cmd = format!(
         r#"APK="{apk_path}"; \
 echo "M:$(unzip -p "$APK" AndroidManifest.xml 2>/dev/null | base64)"; \
-ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap/ && /\.(png|webp)$/ && /ic_launcher|launcher_icon|app_icon|icon_round/ {{print $4}}' | sort -r | head -1); \
+ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/(mipmap|drawable)/ && /\.(png|webp)$/ && /ic_launcher|launcher_icon|app_icon|icon_round/ {{print $4}}' | sort -r | head -1); \
 if [ -z "$ICON" ]; then \
   ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap-xxhdpi/ && /\.(png|webp)$/ {{print $4}}' | head -1); \
 fi; \
@@ -550,7 +553,7 @@ fn fetch_apk_icon_data_url(
     let cmd = format!(
         r#"{}; \
 if [ -z "$APK" ]; then exit 1; fi; \
-ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap/ && /\.(png|webp)$/ && /ic_launcher|launcher_icon|app_icon|icon_round/ {{print $4}}' | sort -r | head -1); \
+ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/(mipmap|drawable)/ && /\.(png|webp)$/ && /ic_launcher|launcher_icon|app_icon|icon_round/ {{print $4}}' | sort -r | head -1); \
 if [ -z "$ICON" ]; then \
   ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap-xxhdpi/ && /\.(png|webp)$/ {{print $4}}' | head -1); \
 fi; \
@@ -612,6 +615,12 @@ fn normalize_label_candidate(s: &str) -> String {
 }
 
 fn is_label_candidate(s: &str, package_name: &str) -> bool {
+    if s.contains('.') || s.contains(':') || s.contains('/') {
+        return false;
+    }
+    if is_weak_label(s) {
+        return false;
+    }
     let len = s.chars().count();
     if len < 2 || len > 32 {
         return false;
@@ -695,6 +704,33 @@ fn score_label(label: &str, package_name: &str) -> i32 {
         }
     }
     score
+}
+
+fn is_overlay_package(package_name: &str) -> bool {
+    package_name.contains(".overlay")
+}
+
+fn should_fetch_play(pkg: &PackageInfo) -> bool {
+    if is_overlay_package(&pkg.package_name) {
+        return false;
+    }
+    if !pkg.is_system {
+        return true;
+    }
+    pkg.apk_path
+        .as_deref()
+        .is_some_and(|p| p.starts_with("/data/app"))
+}
+
+fn is_weak_label(label: &str) -> bool {
+    let trimmed = label.trim();
+    if trimmed.contains('.') || trimmed.contains(':') || trimmed.contains('/') {
+        return true;
+    }
+    matches!(
+        trimmed,
+        "Google" | "Android" | "google" | "android" | "Theme"
+    )
 }
 
 fn known_label(package_name: &str) -> Option<String> {
@@ -840,6 +876,46 @@ Package [com.other.app] (def):
             infer_label_from_package("com.google.android.gm").as_deref(),
             Some("Gmail")
         );
+    }
+
+    #[test]
+    fn rejects_weak_arsc_labels() {
+        assert!(is_weak_label("Theme.AppCompat"));
+        assert!(is_weak_label("google.com:youtube-android"));
+        assert!(is_weak_label("Google"));
+        assert!(is_weak_label("Android"));
+        assert!(!is_weak_label("YouTube Music"));
+        assert!(!is_weak_label("Gmail"));
+        assert!(!is_label_candidate("Theme.AppCompat", "com.google.ar.core"));
+        assert!(!is_label_candidate(
+            "google.com:youtube-android",
+            "com.google.android.youtube"
+        ));
+    }
+
+    #[test]
+    fn fetches_play_for_updated_system_apps_not_overlays() {
+        let data_apk = Some("/data/app/~~x/com.google.android.youtube/base.apk".into());
+        assert!(should_fetch_play(&PackageInfo {
+            package_name: "com.google.android.youtube".into(),
+            is_system: true,
+            apk_path: data_apk.clone(),
+        }));
+        assert!(!should_fetch_play(&PackageInfo {
+            package_name: "com.google.android.cellbroadcastservice.overlay".into(),
+            is_system: true,
+            apk_path: Some("/system_ext/overlay/x.apk".into()),
+        }));
+        assert!(should_fetch_play(&PackageInfo {
+            package_name: "com.whatsapp".into(),
+            is_system: false,
+            apk_path: data_apk,
+        }));
+        assert!(!should_fetch_play(&PackageInfo {
+            package_name: "com.android.systemui".into(),
+            is_system: true,
+            apk_path: Some("/system/priv-app/SystemUI/SystemUI.apk".into()),
+        }));
     }
 
     #[test]
