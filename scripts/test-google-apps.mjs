@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { isGoogleApp } from "../src/googleApps.mjs";
 
 describe("isGoogleApp", () => {
-  it("matches com.google.android.*", () => {
+    it("matches com.google.android.*", () => {
     assert.equal(isGoogleApp("com.google.android.gms"), true);
     assert.equal(isGoogleApp("com.google.android.apps.maps"), true);
     assert.equal(isGoogleApp("com.google.android.youtube"), true);
+    assert.equal(isGoogleApp("com.google.android.gm"), true);
   });
 
   it("matches Chrome exactly", () => {

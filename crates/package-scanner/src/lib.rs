@@ -127,7 +127,7 @@ impl PackageScanner {
                 let scanned = match cached {
                     Some(hit) => ScannedPackage {
                         package_name: pkg.package_name.clone(),
-                        label: hit.label,
+                        label: known_label(&pkg.package_name).or(hit.label),
                         author: hit.author,
                         icon_url: hit.icon_url,
                         is_system: pkg.is_system,
@@ -232,7 +232,10 @@ fn enrich_package(
         fetch_play_cached(http_client, play_cache, &pkg.package_name)
     };
 
-    let mut label = manifest_label.or(play.title.clone());
+    let label = known_label(&pkg.package_name)
+        .or(manifest_label)
+        .or(play.title.clone());
+    let mut label = label;
     if label.is_none() {
         let arsc_strings = fetch_arsc_strings(bridge, &pkg.package_name, pkg.apk_path.as_deref());
         label = extract_label_from_arsc(&arsc_strings, &pkg.package_name);
@@ -694,7 +697,17 @@ fn score_label(label: &str, package_name: &str) -> i32 {
     score
 }
 
+fn known_label(package_name: &str) -> Option<String> {
+    match package_name {
+        "com.google.android.gm" => Some("Gmail".into()),
+        _ => None,
+    }
+}
+
 fn infer_label_from_package(package_name: &str) -> Option<String> {
+    if let Some(label) = known_label(package_name) {
+        return Some(label);
+    }
     const SKIP: &[&str] = &[
         "com", "org", "net", "android", "app", "mobile", "client", "ipn", "mshop", "shopping",
     ];
@@ -809,6 +822,23 @@ Package [com.other.app] (def):
         assert_eq!(
             parse_manifest_label_value("ChatGPT").as_deref(),
             Some("ChatGPT")
+        );
+    }
+
+    #[test]
+    fn known_label_names_gmail() {
+        assert_eq!(
+            known_label("com.google.android.gm").as_deref(),
+            Some("Gmail")
+        );
+        assert!(known_label("com.google.android.gms").is_none());
+    }
+
+    #[test]
+    fn infer_label_does_not_turn_gmail_into_google() {
+        assert_eq!(
+            infer_label_from_package("com.google.android.gm").as_deref(),
+            Some("Gmail")
         );
     }
 
