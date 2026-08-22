@@ -4,7 +4,7 @@
 
 **Goal:** Add a toolbar checkbox “Nascondi Google” (default on) that hides `com.google.android.*` and `com.android.chrome` from the package list without re-scanning.
 
-**Architecture:** Pure helper `isGoogleApp()` in `src/googleApps.ts`, applied in existing `getFilteredPackages()` alongside hide-system / only-suspicious / text search. Client-side only; no ADB or DB changes.
+**Architecture:** Pure helper `isGoogleApp()` in `src/googleApps.mjs` (single source for app + tests; optional thin `src/googleApps.ts` re-export if needed), applied in existing `getFilteredPackages()` alongside hide-system / only-suspicious / text search. Client-side only; no ADB or DB changes.
 
 **Tech Stack:** TypeScript frontend (`src/main.ts`, `index.html`), Node built-in test runner (`node --test`).
 
@@ -24,8 +24,9 @@
 
 | File | Responsibility |
 |---|---|
-| `src/googleApps.ts` | Pure `isGoogleApp(packageName: string): boolean` |
-| `scripts/test-google-apps.mjs` | Contract + behavior tests for the match rules |
+| `src/googleApps.mjs` | Single source: `isGoogleApp(packageName)` |
+| `scripts/test-google-apps.mjs` | Behavior tests importing `../src/googleApps.mjs` |
+| `tsconfig.json` | `allowJs: true` so TS can import `.mjs` |
 | `index.html` | `#hide-google` checkbox in toolbar |
 | `src/main.ts` | Wire helper into filters, events, disable controls |
 | `package.json` | `test:unit` script |
@@ -36,44 +37,24 @@
 ### Task 1: `isGoogleApp` helper (TDD)
 
 **Files:**
-- Create: `src/googleApps.ts`
+- Create: `src/googleApps.mjs`
 - Create: `scripts/test-google-apps.mjs`
 - Modify: `package.json`
+- Modify: `tsconfig.json` (`"allowJs": true`)
 
 **Interfaces:**
-- Produces: `export function isGoogleApp(packageName: string): boolean`
+- Produces: `export function isGoogleApp(packageName)` from `src/googleApps.mjs` (single source; app and tests both import this file)
 
-- [ ] **Step 1: Write the test file**
+- [ ] **Step 1: Write the failing test**
 
 Create `scripts/test-google-apps.mjs`:
 
 ```js
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { isGoogleApp } from "../src/googleApps.mjs";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-/** Must stay identical to the body of `isGoogleApp` in `src/googleApps.ts`. */
-function isGoogleApp(packageName) {
-  return (
-    packageName.startsWith("com.google.android.") ||
-    packageName === "com.android.chrome"
-  );
-}
-
-describe("isGoogleApp source contract", () => {
-  it("exports the helper with required match rules", () => {
-    const src = readFileSync(join(root, "src/googleApps.ts"), "utf8");
-    assert.match(src, /export function isGoogleApp/);
-    assert.match(src, /com\.google\.android\./);
-    assert.match(src, /com\.android\.chrome/);
-  });
-});
-
-describe("isGoogleApp behavior", () => {
+describe("isGoogleApp", () => {
   it("matches com.google.android.*", () => {
     assert.equal(isGoogleApp("com.google.android.gms"), true);
     assert.equal(isGoogleApp("com.google.android.apps.maps"), true);
@@ -104,19 +85,23 @@ describe("isGoogleApp behavior", () => {
 node --test scripts/test-google-apps.mjs
 ```
 
-Expected: FAIL — `src/googleApps.ts` missing (ENOENT) in the source-contract test.
+Expected: FAIL — cannot find module `../src/googleApps.mjs` (ENOENT).
 
-- [ ] **Step 3: Implement `src/googleApps.ts`**
+- [ ] **Step 3: Implement `src/googleApps.mjs` and enable JS in TS**
 
-```ts
+`src/googleApps.mjs`:
+
+```js
 /** True for Google consumer apps: com.google.android.* and Chrome. */
-export function isGoogleApp(packageName: string): boolean {
+export function isGoogleApp(packageName) {
   return (
     packageName.startsWith("com.google.android.") ||
     packageName === "com.android.chrome"
   );
 }
 ```
+
+In `tsconfig.json` → `compilerOptions`, add `"allowJs": true` (needed so Task 2 can `import { isGoogleApp } from "./googleApps.mjs"`).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -135,9 +120,11 @@ Add to `package.json` → `scripts`:
 ```
 
 ```bash
-git add src/googleApps.ts scripts/test-google-apps.mjs package.json
+git add src/googleApps.mjs scripts/test-google-apps.mjs package.json tsconfig.json docs/superpowers/plans/2026-08-22-hide-google-apps.md
 git commit -m "Add isGoogleApp helper for Google package filter."
 ```
+
+**Note:** Task 2 must import from `./googleApps.mjs` (not `./googleApps`).
 
 ---
 
@@ -148,7 +135,7 @@ git commit -m "Add isGoogleApp helper for Google package filter."
 - Modify: `src/main.ts` (`getFilteredPackages` ~L689–700, `setScanControlsDisabled` ~L799–804, listeners ~L1233–1241)
 
 **Interfaces:**
-- Consumes: `isGoogleApp(packageName: string): boolean` from `./googleApps`
+- Consumes: `isGoogleApp(packageName: string): boolean` from `./googleApps.mjs`
 - Produces: `#hide-google` (default checked); AND-filter in `getFilteredPackages`
 
 - [ ] **Step 1: Add checkbox to `index.html`**
@@ -167,7 +154,7 @@ After the “Nascondi sistema” `</label>`, before “Solo sospette”, insert:
 Add with the other imports at the top of `src/main.ts`:
 
 ```ts
-import { isGoogleApp } from "./googleApps";
+import { isGoogleApp } from "./googleApps.mjs";
 ```
 
 Replace `getFilteredPackages` with:
@@ -269,7 +256,7 @@ git commit -m "Document Nascondi Google filter in README."
 
 | Spec requirement | Task |
 |---|---|
-| Match `com.google.android.*` + Chrome | Task 1 |
+| Match `com.google.android.*` + Chrome | Task 1 (single `.mjs` source) |
 | Reject other `com.google.*` | Task 1 |
 | Checkbox default on | Task 2 |
 | AND with other filters | Task 2 |
