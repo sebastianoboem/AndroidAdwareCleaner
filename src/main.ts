@@ -1208,6 +1208,22 @@ window.addEventListener("DOMContentLoaded", () => {
 
   $("#btn-settings-check-update")?.addEventListener("click", () => void checkForAppUpdates(false));
 
+  $("#btn-settings-clear-cache")?.addEventListener("click", async () => {
+    if (
+      !confirm(
+        "Cancellare la cache di nomi e icone? La prossima scansione li rileggerà dal telefono."
+      )
+    ) {
+      return;
+    }
+    try {
+      await invoke("clear_metadata_cache");
+      toast("Cache scansione cancellata", "success");
+    } catch (e) {
+      toast(String(e), "error");
+    }
+  });
+
   $("#btn-update-later")?.addEventListener("click", closeUpdateDialog);
   $("#btn-update-now")?.addEventListener("click", () => void installPendingUpdate());
   $("#dialog-update")?.addEventListener("click", (e) => {

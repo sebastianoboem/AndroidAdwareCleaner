@@ -33,6 +33,7 @@ pub fn run() {
             commands::set_sync_folder,
             commands::sync_now,
             commands::export_report,
+            commands::clear_metadata_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

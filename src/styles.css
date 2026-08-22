@@ -717,7 +717,7 @@ dialog h2 {
 }
 
 .settings-hint {
-  margin: 0 0 1rem;
+  margin: 0.85rem 0 0.6rem;
   font-size: 0.8rem;
   line-height: 1.45;
 }

@@ -146,31 +146,15 @@ impl AdbBridge {
         let mut packages: Vec<PackageInfo> = output
             .lines()
             .filter_map(parse_package_line)
-            .map(|(package_name, apk_path)| PackageInfo {
-                package_name,
-                is_system: false,
-                apk_path,
+            .map(|(package_name, apk_path)| {
+                let is_system = is_initial_system(&package_name, apk_path.as_deref());
+                PackageInfo {
+                    package_name,
+                    is_system,
+                    apk_path,
+                }
             })
             .collect();
-
-        if !user_only {
-            let sys_out = self.run_adb(&[
-                "-s",
-                &serial,
-                "shell",
-                "pm",
-                "list",
-                "packages",
-                "-s",
-            ])?;
-            let system: std::collections::HashSet<String> = sys_out
-                .lines()
-                .filter_map(|l| parse_package_line(l).map(|(name, _)| name))
-                .collect();
-            for pkg in &mut packages {
-                pkg.is_system = system.contains(&pkg.package_name);
-            }
-        }
 
         packages.sort_by(|a, b| a.package_name.cmp(&b.package_name));
         Ok(packages)
@@ -290,6 +274,47 @@ impl AdbBridge {
 
         Ok(if stdout.is_empty() { stderr } else { stdout })
     }
+}
+
+fn is_initial_system(package_name: &str, apk_path: Option<&str>) -> bool {
+    if has_system_prefix(package_name) {
+        return true;
+    }
+    apk_path.is_some_and(apk_on_system_partition)
+}
+
+/// AOSP (`com.android.`) plus the manufacturer/carrier prefixes from the
+/// system-app cheat sheet. Gmail/YouTube (`com.google.android.gm` / `.youtube`)
+/// are not included — only Play Services (`gms`).
+fn has_system_prefix(package_name: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "com.android.",
+        "com.google.android.gms",
+        "com.samsung.android.",
+        "com.miui.",
+        "com.xiaomi.",
+        "com.huawei.",
+        "com.oppo.",
+        "com.oneplus.",
+        "com.vodafone.",
+        "it.telecomitalia.",
+    ];
+    PREFIXES.iter().any(|prefix| {
+        if prefix.ends_with('.') {
+            package_name.starts_with(prefix)
+        } else {
+            package_name == *prefix || package_name.starts_with(&format!("{prefix}."))
+        }
+    })
+}
+
+fn apk_on_system_partition(path: &str) -> bool {
+    path.starts_with("/system/")
+        || path.starts_with("/system_ext/")
+        || path.starts_with("/product/")
+        || path.starts_with("/vendor/")
+        || path.starts_with("/odm/")
+        || path.starts_with("/apex/")
 }
 
 fn parse_package_line(line: &str) -> Option<(String, Option<String>)> {
@@ -427,6 +452,38 @@ mod tests {
     fn rejects_non_package_lines() {
         assert_eq!(parse_package_line(""), None);
         assert_eq!(parse_package_line("package:"), None);
+    }
+
+    #[test]
+    fn initial_system_uses_com_android_and_system_partitions() {
+        assert!(is_initial_system(
+            "com.android.htmlviewer",
+            Some("/system_ext/app/HTMLViewer/HTMLViewer.apk")
+        ));
+        assert!(is_initial_system(
+            "com.google.android.gms",
+            Some("/data/app/~~x/com.google.android.gms/base.apk")
+        ));
+        assert!(is_initial_system(
+            "com.samsung.android.messaging",
+            Some("/data/app/~~x/base.apk")
+        ));
+        assert!(!is_initial_system(
+            "com.google.android.gm",
+            Some("/data/app/~~x/com.google.android.gm/base.apk")
+        ));
+        assert!(!is_initial_system(
+            "com.facebook.appmanager",
+            Some("/my_bigball/app/Facebook-appmanager/Facebook-appmanager.apk")
+        ));
+        assert!(is_initial_system(
+            "com.oplus.ndsf",
+            Some("/product/priv-app/DSF/DSF.apk")
+        ));
+        assert!(!is_initial_system(
+            "com.coloros.relax",
+            Some("/data/app/OppoRelax/OppoRelax.apk")
+        ));
     }
 
     #[test]

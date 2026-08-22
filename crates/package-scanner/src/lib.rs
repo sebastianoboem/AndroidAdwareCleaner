@@ -1,17 +1,17 @@
+mod arsc;
 mod cache;
 
-pub use cache::{CachedMetadata, MetadataCache};
+pub use cache::{CachedMetadata, MetadataCache, METADATA_CACHE_VERSION};
 
 use adb_bridge::{AdbBridge, PackageInfo};
+use arsc::{lookup_all_strings, lookup_string, parse_resource_ref};
 use axmldecoder::{Node, parse as parse_manifest};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rayon::prelude::*;
-use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -38,40 +38,34 @@ pub enum ScanProgress {
 }
 
 #[derive(Debug, Clone, Default)]
-struct PlayMetadata {
-    title: Option<String>,
-    developer: Option<String>,
-    icon_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
 struct PackageDumpInfo {
     installer: Option<String>,
     signing_org: Option<String>,
 }
 
-/// Enrichment is I/O-bound (adb round-trips and Play Store HTTP fetches), so
-/// the pool is larger than the CPU count; it also caps concurrent adb commands.
+enum LabelValue {
+    Literal(String),
+    Reference(u32),
+}
+
+struct AppMeta {
+    label: Option<LabelValue>,
+    icon_res: Option<u32>,
+}
+
+/// Enrichment is I/O-bound (adb round-trips), so the pool is larger than the
+/// CPU count; it also caps concurrent adb commands.
 const SCAN_THREADS: usize = 16;
 
 pub struct PackageScanner {
     bridge: Arc<AdbBridge>,
-    play_cache: Arc<Mutex<HashMap<String, PlayMetadata>>>,
-    http_client: Client,
     cache_path: Option<PathBuf>,
 }
 
 impl PackageScanner {
     pub fn new(bridge: AdbBridge) -> Self {
-        let http_client = Client::builder()
-            .timeout(Duration::from_secs(8))
-            .user_agent("Mozilla/5.0 (compatible; AndroidAdwareCleaner/0.1)")
-            .build()
-            .expect("failed to build HTTP client");
         Self {
             bridge: Arc::new(bridge),
-            play_cache: Arc::new(Mutex::new(HashMap::new())),
-            http_client,
             cache_path: None,
         }
     }
@@ -104,13 +98,10 @@ impl PackageScanner {
         let total = packages.len();
         on_progress(ScanProgress::Started { total });
 
-        let has_base64 = device_has_base64(&self.bridge);
         let metadata_cache = Arc::new(Mutex::new(MetadataCache::load(self.cache_path.clone())));
 
         let on_progress = Arc::new(Mutex::new(on_progress));
         let bridge = Arc::clone(&self.bridge);
-        let play_cache = Arc::clone(&self.play_cache);
-        let http_client = self.http_client.clone();
         let dump_info = Arc::new(dump_info);
         let admins = Arc::new(admins);
 
@@ -137,15 +128,8 @@ impl PackageScanner {
                         is_device_admin: admins.contains(&pkg.package_name),
                     },
                     None => {
-                        let scanned = enrich_package(
-                            &bridge,
-                            &http_client,
-                            &play_cache,
-                            pkg,
-                            &dump_info,
-                            &admins,
-                            has_base64,
-                        );
+                        let (scanned, cacheable) =
+                            enrich_package(&bridge, pkg, &dump_info, &admins);
                         if pkg.apk_path.is_some() {
                             if let Ok(mut c) = metadata_cache.lock() {
                                 c.put(
@@ -155,7 +139,8 @@ impl PackageScanner {
                                         label: scanned.label.clone(),
                                         author: scanned.author.clone(),
                                         icon_url: scanned.icon_url.clone(),
-                                        complete: true,
+                                        complete: cacheable,
+                                        v: METADATA_CACHE_VERSION,
                                     },
                                 );
                             }
@@ -198,82 +183,415 @@ impl PackageScanner {
 
 fn enrich_package(
     bridge: &AdbBridge,
-    http_client: &Client,
-    play_cache: &Arc<Mutex<HashMap<String, PlayMetadata>>>,
     pkg: &PackageInfo,
     dump_info: &HashMap<String, PackageDumpInfo>,
     admins: &HashSet<String>,
-    has_base64: bool,
-) -> ScannedPackage {
+) -> (ScannedPackage, bool) {
     let dumpsys_info = dump_info
         .get(&pkg.package_name)
         .cloned()
         .unwrap_or_default();
     let installer = dumpsys_info.installer.clone();
+    let author = dumpsys_info.signing_org.clone();
 
-    // One merged exec-out fetches manifest and icon together when the device
-    // has base64 and the APK path is already known; otherwise fall back to
-    // the separate per-part fetches (icon lazily, only when Play has none).
-    let (manifest_bytes, merged_icon, used_merged) = match (has_base64, pkg.apk_path.as_deref()) {
-        (true, Some(path)) => {
-            let (m, i) = fetch_manifest_and_icon(bridge, path);
-            (m, i, true)
-        }
-        _ => (
-            fetch_manifest_bytes(bridge, &pkg.package_name, pkg.apk_path.as_deref()),
-            None,
-            false,
-        ),
-    };
-    let manifest_label = manifest_bytes.as_deref().and_then(extract_label_from_manifest);
+    let manifest_bytes =
+        fetch_apk_entry(bridge, &pkg.package_name, pkg.apk_path.as_deref(), "AndroidManifest.xml");
+    let meta = manifest_bytes
+        .as_deref()
+        .map(parse_application_meta)
+        .unwrap_or(AppMeta {
+            label: None,
+            icon_res: None,
+        });
 
-    let play = if should_fetch_play(pkg) {
-        fetch_play_cached(http_client, play_cache, &pkg.package_name)
+    let needs_arsc = matches!(meta.label, Some(LabelValue::Reference(_))) || meta.icon_res.is_some();
+    let arsc_bytes = if needs_arsc {
+        fetch_apk_entry(
+            bridge,
+            &pkg.package_name,
+            pkg.apk_path.as_deref(),
+            "resources.arsc",
+        )
     } else {
-        PlayMetadata::default()
+        None
     };
 
-    let mut label = play
-        .title
+    let apk_label = resolve_apk_label(&meta, arsc_bytes.as_deref());
+    let label = apk_label
         .clone()
         .or_else(|| known_label(&pkg.package_name))
-        .or_else(|| manifest_label.filter(|l| !is_weak_label(l)));
-    if label.is_none() {
-        let arsc_strings = fetch_arsc_strings(bridge, &pkg.package_name, pkg.apk_path.as_deref());
-        label = extract_label_from_arsc(&arsc_strings, &pkg.package_name)
-            .filter(|l| !is_weak_label(l));
-    }
-    let label = label.or_else(|| infer_label_from_package(&pkg.package_name));
+        .or_else(|| infer_label_from_package(&pkg.package_name));
+    let icon_url = resolve_icon(
+        bridge,
+        &pkg.package_name,
+        pkg.apk_path.as_deref(),
+        &meta,
+        arsc_bytes.as_deref(),
+    );
+    let cacheable =
+        apk_label.is_some() || known_label(&pkg.package_name).is_some() || icon_url.is_some();
 
-    let author = if pkg.is_system && play.developer.is_none() {
-        dumpsys_info.signing_org.clone()
-    } else {
-        play.developer
-            .clone()
-            .or(dumpsys_info.signing_org.clone())
+    (
+        ScannedPackage {
+            package_name: pkg.package_name.clone(),
+            label,
+            author,
+            icon_url,
+            is_system: pkg.is_system,
+            installer,
+            is_device_admin: admins.contains(&pkg.package_name),
+        },
+        cacheable,
+    )
+}
+
+fn resolve_apk_label(meta: &AppMeta, arsc: Option<&[u8]>) -> Option<String> {
+    match &meta.label {
+        Some(LabelValue::Literal(s)) => normalize_label(s).filter(|l| !is_weak_label(l)),
+        Some(LabelValue::Reference(id)) => arsc
+            .and_then(|data| lookup_string(data, *id))
+            .and_then(|s| normalize_label(&s))
+            .filter(|s| !is_weak_label(s)),
+        None => None,
+    }
+}
+
+#[cfg(test)]
+fn resolve_label(meta: &AppMeta, arsc: Option<&[u8]>, package_name: &str) -> Option<String> {
+    resolve_apk_label(meta, arsc)
+        .or_else(|| known_label(package_name))
+        .or_else(|| infer_label_from_package(package_name))
+}
+
+fn resolve_icon(
+    bridge: &AdbBridge,
+    package_name: &str,
+    apk_path: Option<&str>,
+    meta: &AppMeta,
+    arsc: Option<&[u8]>,
+) -> Option<String> {
+    let apk_paths = candidate_apk_paths(apk_path);
+    let paths = meta
+        .icon_res
+        .and_then(|id| arsc.map(|data| lookup_all_strings(data, id)))
+        .unwrap_or_default();
+    let mut paths = paths;
+    if pick_icon_path(&paths).is_none() {
+        extend_paths_from_xml(
+            bridge,
+            package_name,
+            apk_path,
+            &apk_paths,
+            arsc,
+            &[],
+            &mut paths,
+        );
+    }
+    if pick_icon_path(&paths).is_none() {
+        let extra_arsc = load_split_arscs(bridge, package_name, &apk_paths);
+        if let Some(id) = meta.icon_res {
+            for table in &extra_arsc {
+                for s in lookup_all_strings(table, id) {
+                    if !paths.contains(&s) {
+                        paths.push(s);
+                    }
+                }
+            }
+        }
+        extend_paths_from_xml(
+            bridge,
+            package_name,
+            apk_path,
+            &apk_paths,
+            arsc,
+            &extra_arsc,
+            &mut paths,
+        );
+    }
+    let picked = pick_icon_path(&paths);
+    let mut url = picked
+        .as_ref()
+        .and_then(|path| fetch_icon_data_url(bridge, package_name, &apk_paths, path));
+    if url.is_none() {
+        for fallback in FALLBACK_LAUNCHER_ENTRIES {
+            if paths.iter().any(|p| p == fallback) {
+                continue;
+            }
+            if let Some(found) = fetch_icon_data_url(bridge, package_name, &apk_paths, fallback) {
+                url = Some(found);
+                break;
+            }
+        }
+    }
+    url
+}
+
+fn load_split_arscs(
+    bridge: &AdbBridge,
+    package_name: &str,
+    apk_paths: &[String],
+) -> Vec<Vec<u8>> {
+    apk_paths
+        .iter()
+        .skip(1)
+        .filter_map(|path| {
+            let bytes = fetch_apk_entry(bridge, package_name, Some(path), "resources.arsc")?;
+            (bytes.len() > 256).then_some(bytes)
+        })
+        .collect()
+}
+
+fn extend_paths_from_xml(
+    bridge: &AdbBridge,
+    package_name: &str,
+    apk_path: Option<&str>,
+    apk_paths: &[String],
+    base_arsc: Option<&[u8]>,
+    extra_arsc: &[Vec<u8>],
+    paths: &mut Vec<String>,
+) {
+    let mut seen = HashSet::new();
+    for _ in 0..4 {
+        let xml_paths: Vec<String> = paths
+            .iter()
+            .filter(|p| p.ends_with(".xml") && seen.insert((*p).clone()))
+            .cloned()
+            .collect();
+        if xml_paths.is_empty() {
+            break;
+        }
+        for xml_path in xml_paths {
+            let Some(xml) = fetch_apk_entry(bridge, package_name, apk_path, &xml_path).or_else(|| {
+                apk_paths
+                    .iter()
+                    .find_map(|p| fetch_apk_entry(bridge, package_name, Some(p), &xml_path))
+            }) else {
+                continue;
+            };
+            for resid in xml_drawable_refs(&xml) {
+                if let Some(base) = base_arsc {
+                    for s in lookup_all_strings(base, resid) {
+                        if !paths.contains(&s) {
+                            paths.push(s);
+                        }
+                    }
+                }
+                for table in extra_arsc {
+                    for s in lookup_all_strings(table, resid) {
+                        if !paths.contains(&s) {
+                            paths.push(s);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn xml_drawable_refs(xml: &[u8]) -> Vec<u32> {
+    let Some(doc) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse_manifest(xml)))
+        .ok()
+        .and_then(Result::ok)
+    else {
+        return Vec::new();
     };
+    let Some(root) = doc.get_root() else {
+        return Vec::new();
+    };
+    let mut foreground = Vec::new();
+    let mut other = Vec::new();
+    collect_xml_drawables(root, false, &mut foreground, &mut other);
+    if foreground.is_empty() {
+        other
+    } else {
+        foreground
+    }
+}
 
-    let mut icon_url = play.icon_url.clone();
-    if icon_url.is_none() {
-        icon_url = if used_merged {
-            merged_icon
-                .as_deref()
-                .filter(|b| is_image_bytes(b))
-                .map(icon_bytes_to_data_url)
-        } else {
-            fetch_apk_icon_data_url(bridge, &pkg.package_name, pkg.apk_path.as_deref())
+fn collect_xml_drawables(
+    node: &Node,
+    in_foreground: bool,
+    foreground: &mut Vec<u32>,
+    other: &mut Vec<u32>,
+) {
+    let Node::Element(el) = node else {
+        return;
+    };
+    let tag = el.get_tag();
+    let now_fg = in_foreground || tag == "foreground";
+    for (key, value) in el.get_attributes() {
+        if key == "android:drawable" || key == "drawable" || key.ends_with(":drawable") {
+            if let Some(id) = parse_resource_ref(value) {
+                if id >> 24 == 0x7f && !foreground.contains(&id) && !other.contains(&id) {
+                    if now_fg {
+                        foreground.push(id);
+                    } else {
+                        other.push(id);
+                    }
+                }
+            }
+        }
+    }
+    for child in el.get_children() {
+        collect_xml_drawables(child, now_fg, foreground, other);
+    }
+}
+
+const FALLBACK_LAUNCHER_ENTRIES: &[&str] = &[
+    "res/mipmap-xxhdpi-v4/ic_launcher.png",
+    "res/mipmap-xxxhdpi-v4/ic_launcher.png",
+    "res/mipmap-xxhdpi-v4/ic_launcher.webp",
+    "res/mipmap-xxxhdpi-v4/ic_launcher.webp",
+    "res/mipmap-xhdpi-v4/ic_launcher.png",
+    "res/mipmap-hdpi-v4/ic_launcher.png",
+];
+
+fn fetch_icon_data_url(
+    bridge: &AdbBridge,
+    package_name: &str,
+    apk_paths: &[String],
+    entry: &str,
+) -> Option<String> {
+    if apk_paths.is_empty() {
+        let bytes = fetch_apk_entry(bridge, package_name, None, entry)?;
+        return is_image_bytes(&bytes).then(|| icon_bytes_to_data_url(&bytes));
+    }
+    for path in apk_paths {
+        if let Some(bytes) = fetch_apk_entry(bridge, package_name, Some(path), entry) {
+            if is_image_bytes(&bytes) {
+                return Some(icon_bytes_to_data_url(&bytes));
+            }
+        }
+    }
+    None
+}
+
+fn candidate_apk_paths(apk_path: Option<&str>) -> Vec<String> {
+    let Some(base) = apk_path else {
+        return Vec::new();
+    };
+    let mut paths = vec![base.to_string()];
+    if let Some((dir, file)) = base.rsplit_once('/') {
+        if file == "base.apk" {
+            for split in [
+                "split_config.xxxhdpi.apk",
+                "split_config.xxhdpi.apk",
+                "split_config.xhdpi.apk",
+            ] {
+                paths.push(format!("{dir}/{split}"));
+            }
+        }
+    }
+    paths
+}
+
+fn pick_icon_path(paths: &[String]) -> Option<String> {
+    paths
+        .iter()
+        .filter(|p| is_apk_image_path(p))
+        .max_by_key(|p| icon_density_score(p))
+        .cloned()
+}
+
+fn icon_density_score(path: &str) -> i32 {
+    let p = path.to_ascii_lowercase();
+    let mut score = 1;
+    if p.contains("xxxhdpi") {
+        score += 40;
+    } else if p.contains("xxhdpi") {
+        score += 30;
+    } else if p.contains("xhdpi") {
+        score += 20;
+    } else if p.contains("hdpi") {
+        score += 10;
+    }
+    if p.ends_with(".png") {
+        score += 1;
+    }
+    if p.contains("1x1") {
+        score -= 50;
+    }
+    score
+}
+
+fn normalize_label(raw: &str) -> Option<String> {
+    let s = raw
+        .replace('\u{a0}', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!s.is_empty()).then_some(s)
+}
+
+fn is_apk_image_path(path: &str) -> bool {
+    let p = path.trim();
+    if !(p.starts_with("res/") || p.starts_with("/res/")) || p.contains("..") {
+        return false;
+    }
+    let name = p.rsplit('/').next().unwrap_or("");
+    if name.is_empty() || name.ends_with(".xml") {
+        return false;
+    }
+    name.ends_with(".png") || name.ends_with(".webp") || !name.contains('.')
+}
+
+fn parse_application_meta(manifest: &[u8]) -> AppMeta {
+    let Ok(doc) = parse_manifest(manifest) else {
+        return AppMeta {
+            label: None,
+            icon_res: None,
         };
-    }
+    };
+    let Some(root) = doc.get_root().as_ref() else {
+        return AppMeta {
+            label: None,
+            icon_res: None,
+        };
+    };
+    find_application_meta(root).unwrap_or(AppMeta {
+        label: None,
+        icon_res: None,
+    })
+}
 
-    ScannedPackage {
-        package_name: pkg.package_name.clone(),
-        label,
-        author,
-        icon_url,
-        is_system: pkg.is_system,
-        installer,
-        is_device_admin: admins.contains(&pkg.package_name),
+fn find_application_meta(node: &Node) -> Option<AppMeta> {
+    match node {
+        Node::Element(el) => {
+            if el.get_tag() == "application" {
+                let attrs = el.get_attributes();
+                let label = attrs
+                    .get("android:label")
+                    .or_else(|| attrs.get("label"))
+                    .and_then(|v| parse_label_value(v));
+                let icon_res = attrs
+                    .get("android:icon")
+                    .or_else(|| attrs.get("icon"))
+                    .and_then(|v| parse_resource_ref(v));
+                return Some(AppMeta { label, icon_res });
+            }
+            for child in el.get_children() {
+                if let Some(meta) = find_application_meta(child) {
+                    return Some(meta);
+                }
+            }
+            None
+        }
+        _ => None,
     }
+}
+
+fn parse_label_value(raw: &str) -> Option<LabelValue> {
+    if let Some(id) = parse_resource_ref(raw) {
+        return Some(LabelValue::Reference(id));
+    }
+    let value = raw.trim();
+    if value.is_empty()
+        || value.starts_with("ResourceValueType::")
+        || value.starts_with('@')
+    {
+        return None;
+    }
+    Some(LabelValue::Literal(value.to_string()))
 }
 
 fn parse_bulk_dumpsys(output: &str) -> HashMap<String, PackageDumpInfo> {
@@ -336,23 +654,6 @@ fn extract_signing_from_line(line: &str) -> Option<String> {
     extract_dn_field(line, "O=")
 }
 
-fn fetch_play_cached(
-    client: &Client,
-    cache: &Arc<Mutex<HashMap<String, PlayMetadata>>>,
-    package_name: &str,
-) -> PlayMetadata {
-    if let Ok(guard) = cache.lock() {
-        if let Some(cached) = guard.get(package_name) {
-            return cached.clone();
-        }
-    }
-    let meta = fetch_play_metadata(client, package_name).unwrap_or_default();
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert(package_name.to_string(), meta.clone());
-    }
-    meta
-}
-
 /// Shell snippet that leaves the APK path in `$APK`: uses the known path when
 /// available, otherwise resolves it on-device via `pm path`.
 fn apk_path_prelude(package_name: &str, apk_path: Option<&str>) -> String {
@@ -364,208 +665,26 @@ fn apk_path_prelude(package_name: &str, apk_path: Option<&str>) -> String {
     }
 }
 
-fn fetch_manifest_bytes(
+fn fetch_apk_entry(
     bridge: &AdbBridge,
     package_name: &str,
     apk_path: Option<&str>,
+    entry: &str,
 ) -> Option<Vec<u8>> {
+    let safe_entry = entry.replace('"', "");
+    if safe_entry.is_empty() || safe_entry.contains("..") {
+        return None;
+    }
     let cmd = format!(
-        "{}; [ -n \"$APK\" ] && unzip -p \"$APK\" AndroidManifest.xml",
+        "{}; [ -n \"$APK\" ] && unzip -p \"$APK\" \"{safe_entry}\"",
         apk_path_prelude(package_name, apk_path)
     );
     let bytes = bridge.exec_out(&cmd).ok()?;
-    if bytes.len() < 8 {
-        None
-    } else {
-        Some(bytes)
-    }
+    is_plausible_apk_entry(&bytes).then_some(bytes)
 }
 
-fn device_has_base64(bridge: &AdbBridge) -> bool {
-    bridge
-        .shell("command -v base64 >/dev/null 2>&1 && echo yes")
-        .map(|o| o.contains("yes"))
-        .unwrap_or(false)
-}
-
-fn fetch_manifest_and_icon(
-    bridge: &AdbBridge,
-    apk_path: &str,
-) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
-    let cmd = format!(
-        r#"APK="{apk_path}"; \
-echo "M:$(unzip -p "$APK" AndroidManifest.xml 2>/dev/null | base64)"; \
-ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/(mipmap|drawable)/ && /\.(png|webp)$/ && /ic_launcher|launcher_icon|app_icon|icon_round/ {{print $4}}' | sort -r | head -1); \
-if [ -z "$ICON" ]; then \
-  ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap-xxhdpi/ && /\.(png|webp)$/ {{print $4}}' | head -1); \
-fi; \
-[ -n "$ICON" ] && echo "I:$(unzip -p "$APK" "$ICON" 2>/dev/null | base64)""#
-    );
-    match bridge.exec_out(&cmd) {
-        Ok(bytes) => parse_manifest_icon_output(&String::from_utf8_lossy(&bytes)),
-        Err(_) => (None, None),
-    }
-}
-
-fn parse_manifest_icon_output(text: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
-    let mut manifest_b64 = String::new();
-    let mut icon_b64 = String::new();
-    let mut in_icon = false;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("M:") {
-            in_icon = false;
-            manifest_b64.push_str(rest);
-        } else if let Some(rest) = line.strip_prefix("I:") {
-            in_icon = true;
-            icon_b64.push_str(rest);
-        } else if in_icon {
-            icon_b64.push_str(line);
-        } else {
-            manifest_b64.push_str(line);
-        }
-    }
-    (decode_b64(&manifest_b64), decode_b64(&icon_b64))
-}
-
-fn decode_b64(s: &str) -> Option<Vec<u8>> {
-    let compact: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    if compact.is_empty() {
-        return None;
-    }
-    STANDARD.decode(compact).ok().filter(|b| !b.is_empty())
-}
-
-fn extract_label_from_manifest(manifest: &[u8]) -> Option<String> {
-    let doc = parse_manifest(manifest).ok()?;
-    let root = doc.get_root().as_ref()?;
-    find_application_label(root)
-}
-
-fn find_application_label(node: &Node) -> Option<String> {
-    match node {
-        Node::Element(el) => {
-            if el.get_tag() == "application" {
-                return el
-                    .get_attributes()
-                    .get("android:label")
-                    .or_else(|| el.get_attributes().get("label"))
-                    .and_then(|value| parse_manifest_label_value(value));
-            }
-            for child in el.get_children() {
-                if let Some(label) = find_application_label(child) {
-                    return Some(label);
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-fn parse_manifest_label_value(raw: &str) -> Option<String> {
-    let value = raw.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if value.starts_with("ResourceValueType::")
-        || value.starts_with('@')
-        || value.contains("Reference/")
-    {
-        return None;
-    }
-    Some(value.to_string())
-}
-
-fn fetch_arsc_strings(bridge: &AdbBridge, package_name: &str, apk_path: Option<&str>) -> String {
-    let cmd = format!(
-        "{}; [ -n \"$APK\" ] && unzip -p \"$APK\" resources.arsc 2>/dev/null | strings | head -c 262144",
-        apk_path_prelude(package_name, apk_path)
-    );
-    bridge.shell(&cmd).unwrap_or_default()
-}
-
-fn fetch_play_metadata(client: &Client, package_name: &str) -> Option<PlayMetadata> {
-    let url = format!(
-        "https://play.google.com/store/apps/details?id={package_name}&hl=en"
-    );
-    let html = client.get(&url).send().ok()?.text().ok()?;
-    if html.contains("We're sorry, the requested URL was not found") {
-        return None;
-    }
-
-    let title = extract_play_title(&html);
-    let developer = extract_play_developer(&html);
-    let icon_url = extract_play_icon(&html);
-    if title.is_none() && developer.is_none() && icon_url.is_none() {
-        return None;
-    }
-    Some(PlayMetadata {
-        title,
-        developer,
-        icon_url,
-    })
-}
-
-fn extract_play_title(html: &str) -> Option<String> {
-    let marker = "itemprop=\"name\">";
-    let rest = html.find(marker)?;
-    let value = html[rest + marker.len()..].split('<').next()?.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-fn extract_play_developer(html: &str) -> Option<String> {
-    let marker = "href=\"/store/apps/dev";
-    let start = html.find(marker)?;
-    let rest = &html[start..];
-    let span_start = rest.find("<span>")? + "<span>".len();
-    let value = rest[span_start..].split('<').next()?.trim();
-    (!value.is_empty()).then(|| value.to_string())
-}
-
-fn extract_play_icon(html: &str) -> Option<String> {
-    for marker in [
-        "property=\"og:image\" content=\"",
-        "property='og:image' content='",
-        "itemprop=\"image\" content=\"",
-    ] {
-        if let Some(start) = html.find(marker) {
-            let rest = &html[start + marker.len()..];
-            let url = rest.split(['"', '\'']).next()?.trim();
-            if url.starts_with("https://") {
-                return Some(url.to_string());
-            }
-        }
-    }
-
-    let marker = "https://play-lh.googleusercontent.com/";
-    let start = html.find(marker)?;
-    let rest = &html[start..];
-    let end = rest.find(['"', '\'', ' ', '<']).unwrap_or(rest.len());
-    let url = rest[..end].trim();
-    (!url.is_empty()).then(|| url.to_string())
-}
-
-fn fetch_apk_icon_data_url(
-    bridge: &AdbBridge,
-    package_name: &str,
-    apk_path: Option<&str>,
-) -> Option<String> {
-    let cmd = format!(
-        r#"{}; \
-if [ -z "$APK" ]; then exit 1; fi; \
-ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/(mipmap|drawable)/ && /\.(png|webp)$/ && /ic_launcher|launcher_icon|app_icon|icon_round/ {{print $4}}' | sort -r | head -1); \
-if [ -z "$ICON" ]; then \
-  ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap-xxhdpi/ && /\.(png|webp)$/ {{print $4}}' | head -1); \
-fi; \
-if [ -z "$ICON" ]; then exit 1; fi; \
-unzip -p "$APK" "$ICON" 2>/dev/null"#,
-        apk_path_prelude(package_name, apk_path)
-    );
-    let bytes = bridge.exec_out(&cmd).ok()?;
-    if !is_image_bytes(&bytes) {
-        return None;
-    }
-    Some(icon_bytes_to_data_url(&bytes))
+fn is_plausible_apk_entry(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && !bytes.starts_with(b"unzip:")
 }
 
 fn is_image_bytes(bytes: &[u8]) -> bool {
@@ -580,146 +699,6 @@ fn icon_bytes_to_data_url(bytes: &[u8]) -> String {
         "image/webp"
     };
     format!("data:{mime};base64,{}", STANDARD.encode(bytes))
-}
-
-fn extract_label_from_arsc(strings: &str, package_name: &str) -> Option<String> {
-    let mut freq: HashMap<String, usize> = HashMap::new();
-    for line in strings.lines() {
-        let normalized = normalize_label_candidate(line);
-        if is_label_candidate(&normalized, package_name) {
-            *freq.entry(normalized).or_default() += 1;
-        }
-    }
-
-    freq.into_iter()
-        .max_by(|a, b| {
-            score_label(&a.0, package_name)
-                .cmp(&score_label(&b.0, package_name))
-                .then_with(|| a.1.cmp(&b.1))
-        })
-        .map(|(label, _)| label)
-}
-
-fn normalize_label_candidate(s: &str) -> String {
-    let s = s.trim();
-    if let Some(idx) = s.to_lowercase().find(" to ") {
-        let after = s[idx + 4..].trim();
-        if !after.is_empty()
-            && after.split_whitespace().count() <= 3
-            && after.chars().next().is_some_and(|c| c.is_uppercase())
-        {
-            return after.to_string();
-        }
-    }
-    s.to_string()
-}
-
-fn is_label_candidate(s: &str, package_name: &str) -> bool {
-    if s.contains('.') || s.contains(':') || s.contains('/') {
-        return false;
-    }
-    if is_weak_label(s) {
-        return false;
-    }
-    let len = s.chars().count();
-    if len < 2 || len > 32 {
-        return false;
-    }
-    if !s.is_char_boundary(0) {
-        return false;
-    }
-    let lower = s.to_lowercase();
-    if lower.contains("http")
-        || lower.contains("%1$s")
-        || lower.contains("%d")
-        || lower.contains("please ")
-        || lower.contains("error")
-        || lower.contains("version")
-    {
-        return false;
-    }
-    if s.split_whitespace().count() > 4 {
-        return false;
-    }
-    if s.chars().any(|c| c.is_control()) {
-        return false;
-    }
-    const BLOCK: &[&str] = &[
-        "Settings",
-        "Privacy",
-        "Learn more",
-        "Cancel",
-        "OK",
-        "Warning",
-        "Delete",
-        "Version",
-        "About",
-        "Welcome",
-        "more",
-        "More",
-        "next",
-        "Next",
-        "back",
-        "done",
-        "edit",
-        "view",
-        "open",
-        "close",
-        "skip",
-        "yes",
-        "no",
-    ];
-    if BLOCK.iter().any(|b| s.eq_ignore_ascii_case(b)) {
-        return false;
-    }
-    if s == package_name {
-        return false;
-    }
-    true
-}
-
-fn score_label(label: &str, package_name: &str) -> i32 {
-    let mut score = 0;
-    let words = label.split_whitespace().count();
-    if words <= 2 {
-        score += 10;
-    }
-    if words == 1 {
-        score += 8;
-    }
-    if label.chars().next().is_some_and(|c| c.is_uppercase()) {
-        score += 6;
-    }
-    if label.chars().all(|c| c.is_ascii_lowercase()) && label.len() < 6 {
-        score -= 12;
-    }
-    if label.len() <= 16 {
-        score += 3;
-    }
-    for segment in package_name.split('.').filter(|s| s.len() > 2) {
-        if label.eq_ignore_ascii_case(segment) {
-            score += 12;
-        } else if label.to_lowercase().contains(&segment.to_lowercase()) {
-            score += 6;
-        }
-    }
-    score
-}
-
-fn is_overlay_package(package_name: &str) -> bool {
-    package_name.contains(".overlay")
-}
-
-fn should_fetch_play(pkg: &PackageInfo) -> bool {
-    if is_overlay_package(&pkg.package_name) {
-        return false;
-    }
-    if !pkg.is_system {
-        return true;
-    }
-    pkg.apk_path
-        .as_deref()
-        .is_some_and(|p| p.starts_with("/data/app"))
 }
 
 fn is_weak_label(label: &str) -> bool {
@@ -835,30 +814,54 @@ Package [com.other.app] (def):
     }
 
     #[test]
-    fn picks_chatgpt_label_from_arsc() {
-        let strings = "more\nmore\nmore\nChatGPT\nChatGPT Plus\nPrivacy\nLearn more\n";
+    fn parse_label_value_treats_resource_as_reference() {
+        match parse_label_value("ResourceValueType::Reference/2131755036") {
+            Some(LabelValue::Reference(id)) => assert_eq!(id, 0x7f10001c),
+            _ => panic!("expected resource reference"),
+        }
+    }
+
+    #[test]
+    fn parse_label_value_keeps_literal() {
+        match parse_label_value("ChatGPT") {
+            Some(LabelValue::Literal(s)) => assert_eq!(s, "ChatGPT"),
+            _ => panic!("expected literal"),
+        }
+        assert!(parse_label_value("ResourceValueType::String").is_none());
+    }
+
+    #[test]
+    fn resolve_label_uses_manifest_literal() {
+        let meta = AppMeta {
+            label: Some(LabelValue::Literal("HTML Viewer".into())),
+            icon_res: None,
+        };
         assert_eq!(
-            extract_label_from_arsc(strings, "com.openai.chatgpt").as_deref(),
-            Some("ChatGPT")
+            resolve_label(&meta, None, "com.android.htmlviewer").as_deref(),
+            Some("HTML Viewer")
         );
     }
 
     #[test]
-    fn parses_plain_manifest_label() {
-        let manifest = br#"not xml"#;
-        assert!(extract_label_from_manifest(manifest).is_none());
+    fn resolve_label_skips_weak_literal() {
+        let meta = AppMeta {
+            label: Some(LabelValue::Literal("Google".into())),
+            icon_res: None,
+        };
+        assert_eq!(
+            resolve_label(&meta, None, "com.google.android.gm").as_deref(),
+            Some("Gmail")
+        );
     }
 
     #[test]
-    fn ignores_manifest_resource_reference() {
-        assert!(parse_manifest_label_value(
-            "ResourceValueType::Reference/2132017286"
-        )
-        .is_none());
-        assert_eq!(
-            parse_manifest_label_value("ChatGPT").as_deref(),
-            Some("ChatGPT")
-        );
+    fn is_apk_image_path_accepts_png_under_res() {
+        assert!(is_apk_image_path("res/mipmap-xxhdpi/ic_launcher.png"));
+        assert!(is_apk_image_path("res/raw/btD"));
+        assert!(!is_apk_image_path("res/raw/btt.xml"));
+        assert!(!is_apk_image_path("res/mipmap-anydpi-v26/ic_launcher.xml"));
+        assert!(!is_apk_image_path("whatsapp_icon.png"));
+        assert!(!is_apk_image_path("res/../ic.png"));
     }
 
     #[test]
@@ -886,92 +889,82 @@ Package [com.other.app] (def):
         assert!(is_weak_label("Android"));
         assert!(!is_weak_label("YouTube Music"));
         assert!(!is_weak_label("Gmail"));
-        assert!(!is_label_candidate("Theme.AppCompat", "com.google.ar.core"));
-        assert!(!is_label_candidate(
-            "google.com:youtube-android",
-            "com.google.android.youtube"
-        ));
-    }
-
-    #[test]
-    fn fetches_play_for_updated_system_apps_not_overlays() {
-        let data_apk = Some("/data/app/~~x/com.google.android.youtube/base.apk".into());
-        assert!(should_fetch_play(&PackageInfo {
-            package_name: "com.google.android.youtube".into(),
-            is_system: true,
-            apk_path: data_apk.clone(),
-        }));
-        assert!(!should_fetch_play(&PackageInfo {
-            package_name: "com.google.android.cellbroadcastservice.overlay".into(),
-            is_system: true,
-            apk_path: Some("/system_ext/overlay/x.apk".into()),
-        }));
-        assert!(should_fetch_play(&PackageInfo {
-            package_name: "com.whatsapp".into(),
-            is_system: false,
-            apk_path: data_apk,
-        }));
-        assert!(!should_fetch_play(&PackageInfo {
-            package_name: "com.android.systemui".into(),
-            is_system: true,
-            apk_path: Some("/system/priv-app/SystemUI/SystemUI.apk".into()),
-        }));
-    }
-
-    #[test]
-    fn picks_amazon_label_from_arsc() {
-        let strings = "Amazon\nAmazon\nPlease upgrade\nShopping cart\n";
-        assert_eq!(
-            extract_label_from_arsc(strings, "com.amazon.mShop.android.shopping").as_deref(),
-            Some("Amazon")
-        );
-    }
-
-    #[test]
-    fn parses_merged_manifest_and_icon_sections() {
-        let manifest = b"\x03\x00\x08\x00manifest-bytes";
-        let icon = b"\x89PNGicon-bytes";
-        let text = format!(
-            "M:{}\nI:{}\n",
-            STANDARD.encode(manifest),
-            STANDARD.encode(icon)
-        );
-        let (m, i) = parse_manifest_icon_output(&text);
-        assert_eq!(m.as_deref(), Some(manifest.as_slice()));
-        assert_eq!(i.as_deref(), Some(icon.as_slice()));
-    }
-
-    #[test]
-    fn parses_merged_output_with_wrapped_base64_lines() {
-        let manifest = vec![7u8; 100];
-        let encoded = STANDARD.encode(&manifest);
-        let (head, tail) = encoded.split_at(76);
-        let text = format!("M:{head}\n{tail}\n");
-        let (m, i) = parse_manifest_icon_output(&text);
-        assert_eq!(m.as_deref(), Some(manifest.as_slice()));
-        assert!(i.is_none());
-    }
-
-    #[test]
-    fn merged_output_empty_yields_none() {
-        assert_eq!(parse_manifest_icon_output(""), (None, None));
-        assert_eq!(parse_manifest_icon_output("M:\nI:\n"), (None, None));
-    }
-
-    #[test]
-    fn extracts_play_metadata_from_html() {
-        let html = r#"<meta property="og:image" content="https://play-lh.googleusercontent.com/icon.png"><span itemprop="name">ChatGPT</span><a href="/store/apps/dev?id=1"><span>OpenAI</span></a>"#;
-        assert_eq!(extract_play_title(html).as_deref(), Some("ChatGPT"));
-        assert_eq!(extract_play_developer(html).as_deref(), Some("OpenAI"));
-        assert_eq!(
-            extract_play_icon(html).as_deref(),
-            Some("https://play-lh.googleusercontent.com/icon.png")
-        );
     }
 
     #[test]
     fn does_not_use_google_play_as_author() {
         let dumpsys = "installerPackageName=com.android.vending";
         assert!(extract_signing_organization(dumpsys).is_none());
+    }
+
+    #[test]
+    fn normalize_label_replaces_nbsp() {
+        assert_eq!(
+            normalize_label("WhatsApp\u{a0}Business").as_deref(),
+            Some("WhatsApp Business")
+        );
+    }
+
+    #[test]
+    fn pick_icon_path_prefers_png_over_xml() {
+        let paths = [
+            "res/mipmap-anydpi-v26/ic_launcher.xml".into(),
+            "res/mipmap-xxhdpi-v4/ic_launcher.png".into(),
+            "res/lbs.png".into(),
+        ];
+        assert_eq!(
+            pick_icon_path(&paths).as_deref(),
+            Some("res/mipmap-xxhdpi-v4/ic_launcher.png")
+        );
+    }
+
+    #[test]
+    fn pick_icon_path_skips_xml_when_names_are_obfuscated() {
+        let paths = [
+            "res/fHq.png".into(),
+            "res/ilG.png".into(),
+            "res/BWP.xml".into(),
+        ];
+        assert_eq!(pick_icon_path(&paths).as_deref(), Some("res/ilG.png"));
+    }
+
+    #[test]
+    fn pick_icon_path_accepts_extensionless_webp_in_res_raw() {
+        let paths = [
+            "res/raw/bto".into(),
+            "res/raw/btD".into(),
+            "res/raw/btt.xml".into(),
+        ];
+        assert_eq!(pick_icon_path(&paths).as_deref(), Some("res/raw/btD"));
+    }
+
+    #[test]
+    fn rejects_unzip_error_as_apk_entry() {
+        assert!(!is_plausible_apk_entry(b""));
+        assert!(!is_plausible_apk_entry(
+            b"unzip: couldn't open /data/app/x/split_config.xxxhdpi.apk: I/O error\n"
+        ));
+        assert!(is_plausible_apk_entry(&[0x03, 0x00, 0x08, 0x00, 0x10]));
+    }
+
+    #[test]
+    fn pick_icon_path_skips_1x1_placeholder() {
+        let paths = ["res/1x1.png".into(), "res/kp.png".into()];
+        assert_eq!(pick_icon_path(&paths).as_deref(), Some("res/kp.png"));
+    }
+
+    #[test]
+    fn xml_drawable_refs_reads_adaptive_foreground() {
+        let xml = include_bytes!("testdata/camera_adaptive.bin");
+        assert_eq!(xml_drawable_refs(xml), vec![2131231199]);
+    }
+
+    #[test]
+    fn candidate_apk_paths_includes_density_splits() {
+        let paths = candidate_apk_paths(Some(
+            "/data/app/~~x/com.whatsapp.w4b-y/base.apk",
+        ));
+        assert_eq!(paths[0], "/data/app/~~x/com.whatsapp.w4b-y/base.apk");
+        assert!(paths.iter().any(|p| p.ends_with("split_config.xxhdpi.apk")));
     }
 }

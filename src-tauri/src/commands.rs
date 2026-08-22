@@ -274,6 +274,13 @@ pub async fn scan_packages(
     Ok(())
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub fn clear_metadata_cache(state: State<'_, AppState>) -> Result<(), String> {
+    let path = state.metadata_cache_path.clone();
+    let mut cache = package_scanner::MetadataCache::load(Some(path));
+    cache.clear().map_err(|e| e.to_string())
+}
+
 fn package_to_row(
     p: ScannedPackage,
     reputations: &std::collections::HashMap<String, PackageReputation>,

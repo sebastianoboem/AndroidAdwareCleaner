@@ -1,6 +1,6 @@
 [package]
 name = "android-adware-cleaner"
-version = "0.3.2"
+version = "0.4.5"
 description = "Bulk Android adware uninstaller for repair shops"
 authors = ["ilpano"]
 edition = "2021"
