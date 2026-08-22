@@ -91,6 +91,8 @@ impl PackageScanner {
         let total = packages.len();
         on_progress(ScanProgress::Started { total });
 
+        let has_base64 = device_has_base64(&self.bridge);
+
         let on_progress = Arc::new(Mutex::new(on_progress));
         let bridge = Arc::clone(&self.bridge);
         let play_cache = Arc::clone(&self.play_cache);
@@ -111,6 +113,7 @@ impl PackageScanner {
                     pkg,
                     &dump_info,
                     &admins,
+                    has_base64,
                 );
                 if let Ok(mut cb) = on_progress.lock() {
                     cb(ScanProgress::Package(scanned));
@@ -148,6 +151,7 @@ fn enrich_package(
     pkg: &PackageInfo,
     dump_info: &HashMap<String, PackageDumpInfo>,
     admins: &HashSet<String>,
+    has_base64: bool,
 ) -> ScannedPackage {
     let dumpsys_info = dump_info
         .get(&pkg.package_name)
@@ -155,9 +159,21 @@ fn enrich_package(
         .unwrap_or_default();
     let installer = dumpsys_info.installer.clone();
 
-    let manifest_label = fetch_manifest_bytes(bridge, &pkg.package_name)
-        .as_deref()
-        .and_then(extract_label_from_manifest);
+    // One merged exec-out fetches manifest and icon together when the device
+    // has base64 and the APK path is already known; otherwise fall back to
+    // the separate per-part fetches (icon lazily, only when Play has none).
+    let (manifest_bytes, merged_icon, used_merged) = match (has_base64, pkg.apk_path.as_deref()) {
+        (true, Some(path)) => {
+            let (m, i) = fetch_manifest_and_icon(bridge, path);
+            (m, i, true)
+        }
+        _ => (
+            fetch_manifest_bytes(bridge, &pkg.package_name, pkg.apk_path.as_deref()),
+            None,
+            false,
+        ),
+    };
+    let manifest_label = manifest_bytes.as_deref().and_then(extract_label_from_manifest);
 
     let play = if pkg.is_system {
         PlayMetadata::default()
@@ -167,7 +183,7 @@ fn enrich_package(
 
     let mut label = manifest_label.or(play.title.clone());
     if label.is_none() {
-        let arsc_strings = fetch_arsc_strings(bridge, &pkg.package_name);
+        let arsc_strings = fetch_arsc_strings(bridge, &pkg.package_name, pkg.apk_path.as_deref());
         label = extract_label_from_arsc(&arsc_strings, &pkg.package_name);
     }
     let label = label.or_else(|| infer_label_from_package(&pkg.package_name));
@@ -182,7 +198,14 @@ fn enrich_package(
 
     let mut icon_url = play.icon_url.clone();
     if icon_url.is_none() {
-        icon_url = fetch_apk_icon_data_url(bridge, &pkg.package_name);
+        icon_url = if used_merged {
+            merged_icon
+                .as_deref()
+                .filter(|b| is_image_bytes(b))
+                .map(icon_bytes_to_data_url)
+        } else {
+            fetch_apk_icon_data_url(bridge, &pkg.package_name, pkg.apk_path.as_deref())
+        };
     }
 
     ScannedPackage {
@@ -273,9 +296,25 @@ fn fetch_play_cached(
     meta
 }
 
-fn fetch_manifest_bytes(bridge: &AdbBridge, package_name: &str) -> Option<Vec<u8>> {
+/// Shell snippet that leaves the APK path in `$APK`: uses the known path when
+/// available, otherwise resolves it on-device via `pm path`.
+fn apk_path_prelude(package_name: &str, apk_path: Option<&str>) -> String {
+    match apk_path {
+        Some(p) => format!("APK=\"{p}\""),
+        None => format!(
+            "APK=$(pm path {package_name} 2>/dev/null | head -1 | cut -d: -f2 | tr -d '\\r')"
+        ),
+    }
+}
+
+fn fetch_manifest_bytes(
+    bridge: &AdbBridge,
+    package_name: &str,
+    apk_path: Option<&str>,
+) -> Option<Vec<u8>> {
     let cmd = format!(
-        "APK=$(pm path {package_name} 2>/dev/null | head -1 | cut -d: -f2 | tr -d '\\r'); [ -n \"$APK\" ] && unzip -p \"$APK\" AndroidManifest.xml"
+        "{}; [ -n \"$APK\" ] && unzip -p \"$APK\" AndroidManifest.xml",
+        apk_path_prelude(package_name, apk_path)
     );
     let bytes = bridge.exec_out(&cmd).ok()?;
     if bytes.len() < 8 {
@@ -283,6 +322,60 @@ fn fetch_manifest_bytes(bridge: &AdbBridge, package_name: &str) -> Option<Vec<u8
     } else {
         Some(bytes)
     }
+}
+
+fn device_has_base64(bridge: &AdbBridge) -> bool {
+    bridge
+        .shell("command -v base64 >/dev/null 2>&1 && echo yes")
+        .map(|o| o.contains("yes"))
+        .unwrap_or(false)
+}
+
+fn fetch_manifest_and_icon(
+    bridge: &AdbBridge,
+    apk_path: &str,
+) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let cmd = format!(
+        r#"APK="{apk_path}"; \
+echo "M:$(unzip -p "$APK" AndroidManifest.xml 2>/dev/null | base64)"; \
+ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap/ && /\.(png|webp)$/ && /ic_launcher|launcher_icon|app_icon|icon_round/ {{print $4}}' | sort -r | head -1); \
+if [ -z "$ICON" ]; then \
+  ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap-xxhdpi/ && /\.(png|webp)$/ {{print $4}}' | head -1); \
+fi; \
+[ -n "$ICON" ] && echo "I:$(unzip -p "$APK" "$ICON" 2>/dev/null | base64)""#
+    );
+    match bridge.exec_out(&cmd) {
+        Ok(bytes) => parse_manifest_icon_output(&String::from_utf8_lossy(&bytes)),
+        Err(_) => (None, None),
+    }
+}
+
+fn parse_manifest_icon_output(text: &str) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    let mut manifest_b64 = String::new();
+    let mut icon_b64 = String::new();
+    let mut in_icon = false;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("M:") {
+            in_icon = false;
+            manifest_b64.push_str(rest);
+        } else if let Some(rest) = line.strip_prefix("I:") {
+            in_icon = true;
+            icon_b64.push_str(rest);
+        } else if in_icon {
+            icon_b64.push_str(line);
+        } else {
+            manifest_b64.push_str(line);
+        }
+    }
+    (decode_b64(&manifest_b64), decode_b64(&icon_b64))
+}
+
+fn decode_b64(s: &str) -> Option<Vec<u8>> {
+    let compact: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.is_empty() {
+        return None;
+    }
+    STANDARD.decode(compact).ok().filter(|b| !b.is_empty())
 }
 
 fn extract_label_from_manifest(manifest: &[u8]) -> Option<String> {
@@ -326,9 +419,10 @@ fn parse_manifest_label_value(raw: &str) -> Option<String> {
     Some(value.to_string())
 }
 
-fn fetch_arsc_strings(bridge: &AdbBridge, package_name: &str) -> String {
+fn fetch_arsc_strings(bridge: &AdbBridge, package_name: &str, apk_path: Option<&str>) -> String {
     let cmd = format!(
-        "APK=$(pm path {package_name} 2>/dev/null | head -1 | cut -d: -f2 | tr -d '\\r'); [ -n \"$APK\" ] && unzip -p \"$APK\" resources.arsc 2>/dev/null | strings"
+        "{}; [ -n \"$APK\" ] && unzip -p \"$APK\" resources.arsc 2>/dev/null | strings | head -c 262144",
+        apk_path_prelude(package_name, apk_path)
     );
     bridge.shell(&cmd).unwrap_or_default()
 }
@@ -394,16 +488,21 @@ fn extract_play_icon(html: &str) -> Option<String> {
     (!url.is_empty()).then(|| url.to_string())
 }
 
-fn fetch_apk_icon_data_url(bridge: &AdbBridge, package_name: &str) -> Option<String> {
+fn fetch_apk_icon_data_url(
+    bridge: &AdbBridge,
+    package_name: &str,
+    apk_path: Option<&str>,
+) -> Option<String> {
     let cmd = format!(
-        r#"APK=$(pm path {package_name} 2>/dev/null | head -1 | cut -d: -f2 | tr -d '\r'); \
+        r#"{}; \
 if [ -z "$APK" ]; then exit 1; fi; \
 ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap/ && /\.(png|webp)$/ && /ic_launcher|launcher_icon|app_icon|icon_round/ {{print $4}}' | sort -r | head -1); \
 if [ -z "$ICON" ]; then \
   ICON=$(unzip -l "$APK" 2>/dev/null | awk '/res\/mipmap-xxhdpi/ && /\.(png|webp)$/ {{print $4}}' | head -1); \
 fi; \
 if [ -z "$ICON" ]; then exit 1; fi; \
-unzip -p "$APK" "$ICON" 2>/dev/null"#
+unzip -p "$APK" "$ICON" 2>/dev/null"#,
+        apk_path_prelude(package_name, apk_path)
     );
     let bytes = bridge.exec_out(&cmd).ok()?;
     if !is_image_bytes(&bytes) {
@@ -669,6 +768,37 @@ Package [com.other.app] (def):
             extract_label_from_arsc(strings, "com.amazon.mShop.android.shopping").as_deref(),
             Some("Amazon")
         );
+    }
+
+    #[test]
+    fn parses_merged_manifest_and_icon_sections() {
+        let manifest = b"\x03\x00\x08\x00manifest-bytes";
+        let icon = b"\x89PNGicon-bytes";
+        let text = format!(
+            "M:{}\nI:{}\n",
+            STANDARD.encode(manifest),
+            STANDARD.encode(icon)
+        );
+        let (m, i) = parse_manifest_icon_output(&text);
+        assert_eq!(m.as_deref(), Some(manifest.as_slice()));
+        assert_eq!(i.as_deref(), Some(icon.as_slice()));
+    }
+
+    #[test]
+    fn parses_merged_output_with_wrapped_base64_lines() {
+        let manifest = vec![7u8; 100];
+        let encoded = STANDARD.encode(&manifest);
+        let (head, tail) = encoded.split_at(76);
+        let text = format!("M:{head}\n{tail}\n");
+        let (m, i) = parse_manifest_icon_output(&text);
+        assert_eq!(m.as_deref(), Some(manifest.as_slice()));
+        assert!(i.is_none());
+    }
+
+    #[test]
+    fn merged_output_empty_yields_none() {
+        assert_eq!(parse_manifest_icon_output(""), (None, None));
+        assert_eq!(parse_manifest_icon_output("M:\nI:\n"), (None, None));
     }
 
     #[test]
