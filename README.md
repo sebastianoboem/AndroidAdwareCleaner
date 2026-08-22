@@ -29,7 +29,7 @@ All’avvio l’app verifica ADB e guida alla connessione USB: opzioni sviluppat
 
 ### 2. Scansiona e filtra
 
-Lista app con **icona**, nome, autore e package. Filtri per nascondere il sistema, cercare per nome e mostrare solo le sospette.
+Lista app con **icona**, nome, autore e package. Filtri per nascondere sistema e app Google (`com.google.android.*` + Chrome, default nascoste), cercare per nome e mostrare solo le sospette.
 
 ### 3. Segnala con le flag
 
