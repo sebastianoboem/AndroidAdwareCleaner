@@ -216,6 +216,22 @@ fn detect_google_drive_root() -> Option<PathBuf> {
             candidates.push(PathBuf::from(&profile).join("Google Drive"));
             candidates.push(PathBuf::from(&profile).join("My Drive"));
         }
+        // Google Drive for desktop (stream mode) mounts a virtual drive letter whose
+        // root is read-only; the writable folder is the localized "My Drive".
+        const MY_DRIVE_NAMES: &[&str] = &[
+            "My Drive",
+            "Il mio Drive",
+            "Meine Ablage",
+            "Mi unidad",
+            "Mon Drive",
+            "Meu Drive",
+        ];
+        for letter in b'D'..=b'Z' {
+            let root = PathBuf::from(format!("{}:\\", letter as char));
+            for name in MY_DRIVE_NAMES {
+                candidates.push(root.join(name));
+            }
+        }
     }
     first_existing(&candidates)
 }
