@@ -197,40 +197,45 @@ fn first_existing(paths: &[PathBuf]) -> Option<PathBuf> {
     paths.iter().find(|p| p.is_dir()).cloned()
 }
 
+/// Google Drive for desktop exposes a read-only root (macOS CloudStorage folder or
+/// Windows virtual drive letter); the writable folder is the localized "My Drive".
+const MY_DRIVE_NAMES: &[&str] = &[
+    "My Drive",
+    "Il mio Drive",
+    "Meine Ablage",
+    "Mi unidad",
+    "Mon Drive",
+    "Meu Drive",
+];
+
+fn push_my_drive_candidates(candidates: &mut Vec<PathBuf>, root: &Path) {
+    for name in MY_DRIVE_NAMES {
+        candidates.push(root.join(name));
+    }
+}
+
 fn detect_google_drive_root() -> Option<PathBuf> {
     let home = home()?;
-    let mut candidates = vec![
+    let mut candidates = Vec::new();
+    for prefix in ["GoogleDrive", "Google Drive"] {
+        if let Some(p) = find_in_cloud_storage(prefix) {
+            push_my_drive_candidates(&mut candidates, &p);
+        }
+    }
+    candidates.extend([
         home.join("Google Drive"),
         home.join("GoogleDrive"),
         home.join("My Drive"),
-    ];
-    if let Some(p) = find_in_cloud_storage("Google Drive") {
-        candidates.insert(0, p);
-    }
-    if let Some(p) = find_in_cloud_storage("GoogleDrive") {
-        candidates.insert(0, p);
-    }
+    ]);
     #[cfg(target_os = "windows")]
     {
         if let Ok(profile) = std::env::var("USERPROFILE") {
             candidates.push(PathBuf::from(&profile).join("Google Drive"));
             candidates.push(PathBuf::from(&profile).join("My Drive"));
         }
-        // Google Drive for desktop (stream mode) mounts a virtual drive letter whose
-        // root is read-only; the writable folder is the localized "My Drive".
-        const MY_DRIVE_NAMES: &[&str] = &[
-            "My Drive",
-            "Il mio Drive",
-            "Meine Ablage",
-            "Mi unidad",
-            "Mon Drive",
-            "Meu Drive",
-        ];
         for letter in b'D'..=b'Z' {
             let root = PathBuf::from(format!("{}:\\", letter as char));
-            for name in MY_DRIVE_NAMES {
-                candidates.push(root.join(name));
-            }
+            push_my_drive_candidates(&mut candidates, &root);
         }
     }
     first_existing(&candidates)
