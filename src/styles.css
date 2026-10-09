@@ -524,6 +524,10 @@ tr.row-suspicious td { background: #221c14; }
 }
 
 /* --- Modals & dialogs --- */
+#dialog-connection.modal-overlay {
+  top: var(--db-panel-height, 3rem);
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;

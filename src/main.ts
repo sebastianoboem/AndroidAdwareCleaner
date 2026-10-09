@@ -54,6 +54,7 @@ interface PackageRow {
   marked_suspicious: boolean;
   is_suspicious: boolean;
   is_reported: boolean;
+  my_vote: string | null;
 }
 
 interface PackageReputation {
@@ -63,9 +64,11 @@ interface PackageReputation {
   marked_system: boolean;
   marked_trusted: boolean;
   marked_suspicious: boolean;
+  my_vote: string | null;
 }
 
 const SUSPICIOUS_UNINSTALL_THRESHOLD = 5;
+const SUSPICIOUS_REPORT_THRESHOLD = 5;
 
 type ScanProgressEvent =
   | {
@@ -113,6 +116,8 @@ interface SyncSettingsView {
   sync_folder: string | null;
   subfolder: string;
   providers: SyncProviderInfo[];
+  supabase_url: string | null;
+  supabase_key: string | null;
 }
 
 // --- State ---
@@ -425,7 +430,14 @@ async function renderConnectionGuideInDialog() {
   renderGuideTips($("#conn-guide-tips")!, tips);
 }
 
+function placeConnectionDialog() {
+  const bar = $("#db-panel");
+  const height = bar?.offsetHeight ?? 0;
+  document.documentElement.style.setProperty("--db-panel-height", `${height}px`);
+}
+
 async function showConnectionDialog() {
+  placeConnectionDialog();
   const overlay = $("#dialog-connection")!;
   const stepsEl = $("#conn-guide-steps")!;
   stepsEl.replaceChildren();
@@ -449,16 +461,17 @@ async function tryConnect(): Promise<boolean> {
 }
 
 async function runPhase2(): Promise<void> {
-  showLoading();
   connectionAttempts = 0;
   await loadBrandOptions();
+  showMain();
+  await refreshDbPanel();
+  ($("#scan-info") as HTMLElement).textContent = "Nessun dispositivo collegato";
 
   while (true) {
-    setLoading("Tentativo di connessione al device…");
     connectionAttempts++;
 
     if (await tryConnect()) {
-      await setLoadingStep("Dispositivo connesso", 500);
+      closeConnectionDialog();
       await onDeviceConnected();
       return;
     }
@@ -796,12 +809,12 @@ function buildPackageRowHtml(p: PackageRow): string {
       </td>
       <td>${p.uninstall_count > 0 ? `<strong>${p.uninstall_count}×</strong>` : "—"}</td>
       <td class="col-flags">
-        <button type="button" class="btn-flag btn-flag-suspicious ${p.marked_suspicious ? "active" : ""}"
-          data-package="${p.package_name}" title="${p.marked_suspicious ? "Rimuovi sospetta" : "Segna come sospetta/adware"}">⚑</button>
-        <button type="button" class="btn-flag btn-flag-system ${p.marked_system ? "active" : ""}"
-          data-package="${p.package_name}" title="Segna come app di sistema">⚙</button>
-        <button type="button" class="btn-flag btn-flag-trusted ${p.marked_trusted ? "active" : ""}"
-          data-package="${p.package_name}" title="Segna come app trusted">✓</button>
+        <button type="button" class="btn-flag btn-flag-suspicious ${p.my_vote === "suspicious" ? "active" : ""}"
+          data-package="${p.package_name}" title="${p.my_vote === "suspicious" ? "Ritira il voto sospetta" : "Vota sospetta"}">⚑</button>
+        <button type="button" class="btn-flag btn-flag-system ${p.my_vote === "system" ? "active" : ""}"
+          data-package="${p.package_name}" title="${p.my_vote === "system" ? "Ritira il voto sistema" : "Vota sistema"}">⚙</button>
+        <button type="button" class="btn-flag btn-flag-trusted ${p.my_vote === "trusted" ? "active" : ""}"
+          data-package="${p.package_name}" title="${p.my_vote === "trusted" ? "Ritira il voto trusted" : "Vota trusted"}">✓</button>
       </td>
     </tr>`;
 }
@@ -936,7 +949,7 @@ async function scanPackages(options?: { forceFull?: boolean }) {
   try {
     await invoke("scan_packages", {
       user_only: userOnly,
-      serial: null,
+      serial: deviceSerial || null,
       on_progress: onProgress,
     });
     await refreshDbPanel();
@@ -968,11 +981,14 @@ function applyReputationUpdate(rep: PackageReputation) {
   row.marked_system = rep.marked_system;
   row.marked_trusted = rep.marked_trusted;
   row.marked_suspicious = rep.marked_suspicious;
+  row.my_vote = rep.my_vote;
   row.is_reported = rep.marked_suspicious;
-  const whitelisted = row.marked_trusted || row.marked_system || row.is_system;
+  const forced = row.report_count >= SUSPICIOUS_REPORT_THRESHOLD && row.marked_suspicious;
+  const whitelisted = !forced && (row.marked_trusted || row.marked_system || row.is_system);
   row.is_suspicious =
-    !whitelisted &&
-    (row.marked_suspicious || row.uninstall_count > SUSPICIOUS_UNINSTALL_THRESHOLD);
+    forced ||
+    (!whitelisted &&
+      (row.marked_suspicious || row.uninstall_count > SUSPICIOUS_UNINSTALL_THRESHOLD));
   updateScanInfo();
   renderTable();
 }
@@ -989,31 +1005,30 @@ function flashDbActivity(label: string) {
   void refreshDbPanel();
 }
 
-async function toggleMark(
-  packageName: string,
-  field: "marked_system" | "marked_trusted" | "marked_suspicious",
-  current: boolean
-) {
+async function toggleMark(packageName: string, flag: "system" | "trusted" | "suspicious") {
+  if (!deviceSerial) {
+    toast("Collega un dispositivo prima di votare", "error");
+    return;
+  }
+  const row = packages.find((p) => p.package_name === packageName);
+  const next = row?.my_vote === flag ? "none" : flag;
   try {
     const rep = await invoke<PackageReputation>("set_package_marks", {
       req: {
         package_name: packageName,
-        [field]: !current,
+        device_serial: deviceSerial,
+        flag: next,
       },
     });
     applyReputationUpdate(rep);
     const label =
-      field === "marked_system"
-        ? !current
-          ? "Segnata come sistema"
-          : "Rimossa segnalazione sistema"
-        : field === "marked_trusted"
-          ? !current
-            ? "Segnata come trusted"
-            : "Rimossa segnalazione trusted"
-          : !current
-            ? "Segnata come sospetta"
-            : "Rimossa segnalazione sospetta";
+      next === "none"
+        ? "Voto ritirato"
+        : flag === "system"
+          ? "Voto: sistema"
+          : flag === "trusted"
+            ? "Voto: trusted"
+            : "Voto: sospetta";
     flashDbActivity(label);
   } catch (e) {
     setDbActivity(`Errore: ${e}`, "err");
@@ -1091,9 +1106,11 @@ function renderSettingsProviders(settings: SyncSettingsView) {
       const status =
         p.id === "local" || p.id === "custom"
           ? ""
-          : p.available
-            ? "Rilevato"
-            : "Non installato";
+          : p.id === "supabase"
+            ? "Condiviso"
+            : p.available
+              ? "Rilevato"
+              : "Non installato";
       const path = p.sync_folder ?? p.detected_root ?? "";
       return `
       <label class="settings-provider ${canSelect ? "" : "unavailable"}">
@@ -1110,12 +1127,15 @@ function renderSettingsProviders(settings: SyncSettingsView) {
     .join("");
 }
 
-function updateSettingsCustomPath(settings: SyncSettingsView) {
+function updateSettingsPanels(settings: SyncSettingsView) {
   const custom = $("#settings-custom-path")!;
+  const supabase = $("#settings-supabase")!;
   const input = $("#settings-folder-input") as HTMLInputElement;
-  const isCustom = settings.provider_id === "custom";
-  custom.classList.toggle("hidden", !isCustom);
+  custom.classList.toggle("hidden", settings.provider_id !== "custom");
+  supabase.classList.toggle("hidden", settings.provider_id !== "supabase");
   input.value = settings.sync_folder ?? "";
+  ($("#settings-supabase-url") as HTMLInputElement).value = settings.supabase_url ?? "";
+  ($("#settings-supabase-key") as HTMLInputElement).value = settings.supabase_key ?? "";
 }
 
 async function updateSettingsStatusText() {
@@ -1134,7 +1154,7 @@ async function updateSettingsStatusText() {
 async function openSettings() {
   const settings = await invoke<SyncSettingsView>("get_sync_settings");
   renderSettingsProviders(settings);
-  updateSettingsCustomPath(settings);
+  updateSettingsPanels(settings);
   await updateSettingsStatusText();
   ($("#settings-app-version") as HTMLElement).textContent = `Versione: ${await getVersion()}`;
   $("#dialog-settings")!.classList.remove("hidden");
@@ -1142,12 +1162,14 @@ async function openSettings() {
 
 async function applySyncProvider(providerId: string) {
   try {
-    if (providerId === "custom") {
-      updateSettingsCustomPath({
-        provider_id: "custom",
+    if (providerId === "custom" || providerId === "supabase") {
+      updateSettingsPanels({
+        provider_id: providerId,
         sync_folder: ($("#settings-folder-input") as HTMLInputElement).value || null,
         subfolder: "AndroidAdwareCleaner",
         providers: [],
+        supabase_url: ($("#settings-supabase-url") as HTMLInputElement).value || null,
+        supabase_key: ($("#settings-supabase-key") as HTMLInputElement).value || null,
       });
       return;
     }
@@ -1159,7 +1181,7 @@ async function applySyncProvider(providerId: string) {
     await refreshDbPanel();
     const settings = await invoke<SyncSettingsView>("get_sync_settings");
     renderSettingsProviders(settings);
-    updateSettingsCustomPath(settings);
+    updateSettingsPanels(settings);
     await updateSettingsStatusText();
   } catch (e) {
     toast(String(e), "error");
@@ -1239,6 +1261,22 @@ window.addEventListener("DOMContentLoaded", () => {
     if (t.name === "sync-provider" && t.checked) void applySyncProvider(t.value);
   });
 
+  $("#btn-settings-supabase")?.addEventListener("click", async () => {
+    const url = ($("#settings-supabase-url") as HTMLInputElement).value;
+    const key = ($("#settings-supabase-key") as HTMLInputElement).value;
+    try {
+      await invoke("set_supabase_config", { url, key });
+      toast("Supabase collegato", "success");
+      await refreshDbPanel();
+      const settings = await invoke<SyncSettingsView>("get_sync_settings");
+      renderSettingsProviders(settings);
+      updateSettingsPanels(settings);
+      await updateSettingsStatusText();
+    } catch (err) {
+      toast(String(err), "error");
+    }
+  });
+
   $("#btn-settings-browse")?.addEventListener("click", async () => {
     const folder = await open({ directory: true, multiple: false });
     if (!folder) return;
@@ -1250,7 +1288,7 @@ window.addEventListener("DOMContentLoaded", () => {
       await refreshDbPanel();
       const settings = await invoke<SyncSettingsView>("get_sync_settings");
       renderSettingsProviders(settings);
-      updateSettingsCustomPath(settings);
+      updateSettingsPanels(settings);
       await updateSettingsStatusText();
     } catch (err) {
       toast(String(err), "error");
@@ -1312,18 +1350,9 @@ window.addEventListener("DOMContentLoaded", () => {
     }
     const pkg = t.dataset.package;
     if (!pkg) return;
-    if (t.classList.contains("btn-flag-suspicious")) {
-      const row = packages.find((p) => p.package_name === pkg);
-      toggleMark(pkg, "marked_suspicious", row?.marked_suspicious ?? false);
-    }
-    if (t.classList.contains("btn-flag-system")) {
-      const row = packages.find((p) => p.package_name === pkg);
-      toggleMark(pkg, "marked_system", row?.marked_system ?? false);
-    }
-    if (t.classList.contains("btn-flag-trusted")) {
-      const row = packages.find((p) => p.package_name === pkg);
-      toggleMark(pkg, "marked_trusted", row?.marked_trusted ?? false);
-    }
+    if (t.classList.contains("btn-flag-suspicious")) toggleMark(pkg, "suspicious");
+    if (t.classList.contains("btn-flag-system")) toggleMark(pkg, "system");
+    if (t.classList.contains("btn-flag-trusted")) toggleMark(pkg, "trusted");
   });
 
   document.querySelectorAll("#packages-table th[data-sort]").forEach((th) => {

@@ -7,6 +7,7 @@ pub const SYNC_SUBFOLDER: &str = "AndroidAdwareCleaner";
 #[serde(rename_all = "snake_case")]
 pub enum SyncProviderId {
     Local,
+    Supabase,
     GoogleDrive,
     Icloud,
     Onedrive,
@@ -18,6 +19,7 @@ impl SyncProviderId {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Local => "local",
+            Self::Supabase => "supabase",
             Self::GoogleDrive => "google_drive",
             Self::Icloud => "icloud",
             Self::Onedrive => "onedrive",
@@ -28,6 +30,7 @@ impl SyncProviderId {
 
     pub fn from_str_id(s: &str) -> Self {
         match s {
+            "supabase" => Self::Supabase,
             "google_drive" => Self::GoogleDrive,
             "icloud" => Self::Icloud,
             "onedrive" => Self::Onedrive,
@@ -54,17 +57,32 @@ pub struct SyncSettingsView {
     pub sync_folder: Option<String>,
     pub subfolder: String,
     pub providers: Vec<SyncProviderInfo>,
+    pub supabase_url: Option<String>,
+    pub supabase_key: Option<String>,
 }
 
 pub fn list_providers() -> Vec<SyncProviderInfo> {
-    vec![
+    let mut providers = vec![provider_supabase()];
+    providers.extend([
         provider_local(),
         provider_google_drive(),
         provider_icloud(),
         provider_onedrive(),
         provider_dropbox(),
         provider_custom(),
-    ]
+    ]);
+    providers
+}
+
+fn provider_supabase() -> SyncProviderInfo {
+    SyncProviderInfo {
+        id: SyncProviderId::Supabase.as_str().into(),
+        name: "Supabase".into(),
+        description: "Il tuo progetto Supabase. Inserisci URL e chiave publishable. Ogni telefono ha un voto per app.".into(),
+        detected_root: None,
+        sync_folder: None,
+        available: true,
+    }
 }
 
 fn provider_local() -> SyncProviderInfo {
@@ -148,7 +166,7 @@ fn root_exists(root: &Option<PathBuf>) -> bool {
 
 pub fn resolve_sync_folder(provider_id: &str, custom_folder: Option<&str>) -> Option<PathBuf> {
     match SyncProviderId::from_str_id(provider_id) {
-        SyncProviderId::Local => None,
+        SyncProviderId::Local | SyncProviderId::Supabase => None,
         SyncProviderId::Custom => custom_folder.map(PathBuf::from),
         SyncProviderId::GoogleDrive => detect_google_drive_root().map(|p| p.join(SYNC_SUBFOLDER)),
         SyncProviderId::Icloud => detect_icloud_root().map(|p| p.join(SYNC_SUBFOLDER)),

@@ -9,6 +9,10 @@ pub struct AppConfig {
     pub sync_folder: Option<String>,
     #[serde(default)]
     pub sync_provider: Option<String>,
+    #[serde(default)]
+    pub supabase_url: Option<String>,
+    #[serde(default)]
+    pub supabase_key: Option<String>,
     pub custom_adb_path: Option<String>,
 }
 
@@ -37,13 +41,16 @@ impl AppState {
             AppConfig::default()
         };
 
-        let sync_dir = config
-            .sync_folder
-            .as_ref()
-            .map(PathBuf::from);
-
-        let mut cloud_sync = CloudSync::new(sync_dir);
-        let _ = cloud_sync.pull(&db);
+        let session_path = config_dir.join("supabase-session.json");
+        let backend = cloud_sync::backend_for(
+            config.sync_provider.as_deref(),
+            config.sync_folder.as_ref().map(PathBuf::from),
+            session_path,
+            config.supabase_url.as_deref(),
+            config.supabase_key.as_deref(),
+        );
+        let mut cloud_sync = CloudSync::new(backend);
+        let _ = cloud_sync.reconcile(&db);
 
         let platform_tools_dir = config_dir.join("platform-tools");
         let metadata_cache_path = config_dir.join("metadata-cache.json");

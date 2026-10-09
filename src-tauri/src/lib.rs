@@ -2,6 +2,7 @@ mod commands;
 mod state;
 
 use state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -31,10 +32,18 @@ pub fn run() {
             commands::get_sync_settings,
             commands::set_sync_provider,
             commands::set_sync_folder,
+            commands::set_supabase_config,
             commands::sync_now,
             commands::export_report,
             commands::clear_metadata_cache,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    commands::reconcile_quiet(&state);
+                }
+            }
+        });
 }

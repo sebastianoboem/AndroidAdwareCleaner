@@ -1,7 +1,7 @@
 use crate::state::AppState;
 use adb_bridge::{AdbBridge, AdbDevice};
 use package_scanner::ScannedPackage;
-use reputation_db::PackageReputation;
+use reputation_db::{row_is_suspicious, PackageReputation};
 use serde::{Deserialize, Serialize};
 use system_setup::{load_guides, resolve_guide, DeviceGuides, GuideStep};
 use tauri::ipc::Channel;
@@ -26,6 +26,7 @@ pub struct PackageRow {
     pub marked_suspicious: bool,
     pub is_suspicious: bool,
     pub is_reported: bool,
+    pub my_vote: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -167,18 +168,27 @@ pub fn list_devices() -> Result<Vec<AdbDevice>, String> {
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn sync_pull(state: State<'_, AppState>) -> Result<cloud_sync::SyncStatus, String> {
+    reconcile_state(&state)
+}
+
+pub fn reconcile_quiet(state: &AppState) {
+    let _ = reconcile_state_inner(state);
+}
+
+fn reconcile_state(state: &AppState) -> Result<cloud_sync::SyncStatus, String> {
+    reconcile_state_inner(state)
+}
+
+fn reconcile_state_inner(state: &AppState) -> Result<cloud_sync::SyncStatus, String> {
     let mut sync = state.cloud_sync.lock().map_err(|e| e.to_string())?;
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    sync.pull(&db).map_err(|e| e.to_string())?;
+    sync.reconcile(&db).map_err(|e| e.to_string())?;
     Ok(sync.status())
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn sync_push(state: State<'_, AppState>) -> Result<cloud_sync::SyncStatus, String> {
-    let mut sync = state.cloud_sync.lock().map_err(|e| e.to_string())?;
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    sync.push(&db).map_err(|e| e.to_string())?;
-    Ok(sync.status())
+    reconcile_state(&state)
 }
 
 #[derive(Clone, Serialize)]
@@ -255,9 +265,21 @@ pub async fn scan_packages(
     serial: Option<String>,
     on_progress: Channel<ScanProgressEvent>,
 ) -> Result<(), String> {
+    let viewer = if serial.as_ref().is_some_and(|s| !s.is_empty()) {
+        serial.clone()
+    } else {
+        AdbBridge::new().ok().and_then(|bridge| bridge.get_serial().ok())
+    };
     let reputations: std::collections::HashMap<String, PackageReputation> = {
+        {
+            let mut sync = state.cloud_sync.lock().map_err(|e| e.to_string())?;
+            if sync.is_supabase() {
+                let db = state.db.lock().map_err(|e| e.to_string())?;
+                let _ = sync.pull_stats(&db);
+            }
+        }
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.all_reputations()
+        db.all_reputations(viewer.as_deref())
             .unwrap_or_default()
             .into_iter()
             .map(|r| (r.package_name.clone(), r))
@@ -292,9 +314,9 @@ fn package_to_row(
     let marked_trusted = rep.map(|r| r.marked_trusted).unwrap_or(false);
     let marked_suspicious = rep.map(|r| r.marked_suspicious).unwrap_or(false);
     let is_reported = marked_suspicious;
-    let is_whitelisted = marked_trusted || marked_system || p.is_system;
-    let is_suspicious =
-        !is_whitelisted && (marked_suspicious || uninstall_count > SUSPICIOUS_THRESHOLD);
+    let is_suspicious = rep
+        .map(|r| row_is_suspicious(r, p.is_system))
+        .unwrap_or_else(|| !p.is_system && uninstall_count > SUSPICIOUS_THRESHOLD);
 
     PackageRow {
         package_name: p.package_name,
@@ -311,6 +333,7 @@ fn package_to_row(
         marked_suspicious,
         is_suspicious,
         is_reported,
+        my_vote: rep.and_then(|r| r.my_vote.clone()),
     }
 }
 
@@ -379,7 +402,6 @@ pub async fn bulk_uninstall(
             }
         }
         drop(db);
-        push_db(&state)?;
     }
 
     let _ = on_progress.send(UninstallProgressEvent::Finished);
@@ -389,9 +411,8 @@ pub async fn bulk_uninstall(
 #[derive(Debug, Deserialize)]
 pub struct SetPackageMarksRequest {
     pub package_name: String,
-    pub marked_system: Option<bool>,
-    pub marked_trusted: Option<bool>,
-    pub marked_suspicious: Option<bool>,
+    pub device_serial: String,
+    pub flag: String,
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -399,41 +420,11 @@ pub fn set_package_marks(
     state: State<'_, AppState>,
     req: SetPackageMarksRequest,
 ) -> Result<PackageReputation, String> {
-    if req.marked_system.is_none()
-        && req.marked_trusted.is_none()
-        && req.marked_suspicious.is_none()
-    {
-        return Err("specificare marked_system, marked_trusted o marked_suspicious".into());
-    }
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    if let Some(value) = req.marked_system {
-        db.set_marked_system(&req.package_name, value)
-            .map_err(|e| e.to_string())?;
-    }
-    if let Some(value) = req.marked_trusted {
-        db.set_marked_trusted(&req.package_name, value)
-            .map_err(|e| e.to_string())?;
-    }
-    if let Some(value) = req.marked_suspicious {
-        db.set_marked_suspicious(&req.package_name, value)
-            .map_err(|e| e.to_string())?;
-    }
-    let rep = db
-        .get_reputation(&req.package_name)
+    db.set_vote(&req.package_name, &req.device_serial, &req.flag)
         .map_err(|e| e.to_string())?;
-    drop(db);
-    push_db(&state)?;
-    Ok(rep)
-}
-
-fn push_db(state: &State<'_, AppState>) -> Result<(), String> {
-    let mut sync = state.cloud_sync.lock().map_err(|e| e.to_string())?;
-    if !sync.status().configured {
-        return Ok(());
-    }
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    sync.push(&db).map_err(|e| e.to_string())?;
-    Ok(())
+    db.get_reputation(&req.package_name, Some(&req.device_serial))
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -471,6 +462,8 @@ pub fn get_sync_settings(state: State<'_, AppState>) -> Result<cloud_sync::SyncS
         }),
         subfolder: cloud_sync::SYNC_SUBFOLDER.into(),
         providers: cloud_sync::list_providers(),
+        supabase_url: config.supabase_url.clone(),
+        supabase_key: config.supabase_key.clone(),
     })
 }
 
@@ -481,10 +474,35 @@ fn apply_sync_folder(state: &AppState, provider_id: &str, folder: Option<String>
         config.sync_folder = folder.clone();
     }
     state.save_config()?;
+    reload_backend(state)
+}
+
+fn reload_backend(state: &AppState) -> Result<(), String> {
+    let (provider, folder, url, key) = {
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        (
+            config.sync_provider.clone(),
+            config.sync_folder.clone(),
+            config.supabase_url.clone(),
+            config.supabase_key.clone(),
+        )
+    };
+    let session_path = state
+        .config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("supabase-session.json");
+    let backend = cloud_sync::backend_for(
+        provider.as_deref(),
+        folder.map(std::path::PathBuf::from),
+        session_path,
+        url.as_deref(),
+        key.as_deref(),
+    );
     let mut sync = state.cloud_sync.lock().map_err(|e| e.to_string())?;
-    sync.set_sync_dir(folder.map(std::path::PathBuf::from));
+    sync.set_backend(backend);
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let _ = sync.pull(&db);
+    let _ = sync.reconcile(&db);
     Ok(())
 }
 
@@ -492,6 +510,25 @@ fn apply_sync_folder(state: &AppState, provider_id: &str, folder: Option<String>
 pub fn set_sync_provider(state: State<'_, AppState>, provider_id: String) -> Result<cloud_sync::SyncStatus, String> {
     if provider_id == "local" {
         apply_sync_folder(&state, "local", None)?;
+        let sync = state.cloud_sync.lock().map_err(|e| e.to_string())?;
+        return Ok(sync.status());
+    }
+    if provider_id == "supabase" {
+        let ready = {
+            let config = state.config.lock().map_err(|e| e.to_string())?;
+            config
+                .supabase_url
+                .as_ref()
+                .is_some_and(|s| !s.trim().is_empty())
+                && config
+                    .supabase_key
+                    .as_ref()
+                    .is_some_and(|s| !s.trim().is_empty())
+        };
+        if !ready {
+            return Err("inserisci URL e chiave publishable".into());
+        }
+        apply_sync_folder(&state, "supabase", None)?;
         let sync = state.cloud_sync.lock().map_err(|e| e.to_string())?;
         return Ok(sync.status());
     }
@@ -512,6 +549,30 @@ pub fn set_sync_provider(state: State<'_, AppState>, provider_id: String) -> Res
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub fn set_supabase_config(
+    state: State<'_, AppState>,
+    url: String,
+    key: String,
+) -> Result<cloud_sync::SyncStatus, String> {
+    let url = url.trim().trim_end_matches('/').to_string();
+    let key = key.trim().to_string();
+    if url.is_empty() || key.is_empty() {
+        return Err("servono URL del progetto e chiave publishable".into());
+    }
+    {
+        let mut config = state.config.lock().map_err(|e| e.to_string())?;
+        config.sync_provider = Some("supabase".into());
+        config.sync_folder = None;
+        config.supabase_url = Some(url);
+        config.supabase_key = Some(key);
+    }
+    state.save_config()?;
+    reload_backend(&state)?;
+    let sync = state.cloud_sync.lock().map_err(|e| e.to_string())?;
+    Ok(sync.status())
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub fn set_sync_folder(state: State<'_, AppState>, folder: Option<String>) -> Result<(), String> {
     if let Some(ref path) = folder {
         cloud_sync::ensure_sync_folder(std::path::Path::new(path)).map_err(|e| e.to_string())?;
@@ -521,11 +582,7 @@ pub fn set_sync_folder(state: State<'_, AppState>, folder: Option<String>) -> Re
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn sync_now(state: State<'_, AppState>) -> Result<cloud_sync::SyncStatus, String> {
-    let mut sync = state.cloud_sync.lock().map_err(|e| e.to_string())?;
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    sync.pull(&db).map_err(|e| e.to_string())?;
-    sync.push(&db).map_err(|e| e.to_string())?;
-    Ok(sync.status())
+    reconcile_state(&state)
 }
 
 #[derive(Debug, Deserialize)]

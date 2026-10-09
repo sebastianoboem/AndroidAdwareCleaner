@@ -30,6 +30,9 @@ rust_out
 # Bundled adb (download via scripts/download-platform-tools.sh)
 resources/platform-tools/
 
+# Supabase URL e chiave pubblica (letta in compilazione da crates/cloud-sync/build.rs)
+.env
+
 # Tauri updater signing (never commit private key)
 src-tauri/.tauri-signing.key
 
