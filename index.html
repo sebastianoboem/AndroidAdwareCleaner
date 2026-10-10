@@ -39,27 +39,21 @@
           <div class="apps-toolbar">
             <input id="filter-text" type="search" placeholder="Cerca app…" />
             <label class="checkbox-label">
-              <input id="hide-system" type="checkbox" checked />
-              Nascondi sistema
-            </label>
-            <label class="checkbox-label">
-              <input id="hide-google" type="checkbox" checked />
-              Nascondi Google
-            </label>
-            <label class="checkbox-label">
               <input id="filter-suspicious" type="checkbox" />
               Solo sospette
             </label>
             <button id="btn-rescan" class="btn small">Aggiorna</button>
+            <button id="btn-optimize" class="btn small" type="button">Ottimizza</button>
             <button id="btn-uninstall" class="btn small danger" disabled>Disinstalla</button>
             <button id="btn-export" class="btn small" disabled>Report</button>
           </div>
           <div class="scan-info-row">
             <p id="scan-info" class="scan-info muted"></p>
-            <div class="flag-legend" aria-label="Legenda flag">
-              <span class="flag-legend-item suspicious">⚑ Sospetta</span>
-              <span class="flag-legend-item system">⚙ Sistema</span>
-              <span class="flag-legend-item trusted">✓ Trusted</span>
+            <div class="flag-legend" aria-label="Mostra o nascondi per flag">
+              <button type="button" class="flag-legend-item suspicious" data-flag-filter="suspicious" aria-pressed="true">⚑ Sospetta</button>
+              <button type="button" class="flag-legend-item system" data-flag-filter="system" aria-pressed="false">⚙ Sistema</button>
+              <button type="button" class="flag-legend-item google" data-flag-filter="google" aria-pressed="false">G Google</button>
+              <button type="button" class="flag-legend-item trusted" data-flag-filter="trusted" aria-pressed="false">✓ Trusted</button>
             </div>
           </div>
           <div id="operation-progress" class="operation-progress hidden" aria-live="polite">
@@ -181,6 +175,38 @@
         <div class="dialog-actions">
           <button id="btn-update-later" type="button" class="btn">Più tardi</button>
           <button id="btn-update-now" type="button" class="btn primary">Aggiorna ora</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="dialog-optimize" class="modal-overlay hidden" role="dialog" aria-modal="true">
+      <div class="modal-panel modal-panel-optimize">
+        <div class="optimize-head">
+          <h2>Ottimizza memoria</h2>
+          <p id="optimize-total" class="optimize-total muted"></p>
+        </div>
+        <div id="optimize-loading" class="optimize-loading">
+          <div class="loader" aria-hidden="true"></div>
+          <p>Analisi della memoria…</p>
+          <ul id="optimize-loading-paths" class="optimize-loading-paths muted"></ul>
+        </div>
+        <p id="optimize-error" class="dialog-body hidden"></p>
+        <div id="optimize-body" class="hidden">
+          <ul id="optimize-categories" class="optimize-categories"></ul>
+        </div>
+        <div id="optimize-progress" class="optimize-progress hidden">
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+            <div id="optimize-progress-fill" class="progress-fill"></div>
+          </div>
+          <p id="optimize-progress-text" class="operation-progress-text">Pulizia…</p>
+        </div>
+        <div id="optimize-result" class="hidden">
+          <p id="optimize-result-text" class="dialog-body"></p>
+          <ul id="optimize-errors" class="optimize-errors"></ul>
+        </div>
+        <div class="dialog-actions">
+          <button id="btn-optimize-cancel" type="button" class="btn">Annulla</button>
+          <button id="btn-optimize-run" type="button" class="btn primary" disabled>Ottimizza</button>
         </div>
       </div>
     </div>

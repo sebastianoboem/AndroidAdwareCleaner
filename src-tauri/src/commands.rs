@@ -235,8 +235,11 @@ fn scan_packages_streaming(
     let device_model = bridge.get_device_property("ro.product.model").ok();
     let device_brand = bridge.get_device_property("ro.product.brand").ok();
 
-    let scanner =
-        package_scanner::PackageScanner::new(bridge).with_cache_path(metadata_cache_path);
+    let mut scanner = package_scanner::PackageScanner::new(bridge);
+    // `npm run tauri dev --noCache` → npm exports npm_config_nocache=true
+    if std::env::var("npm_config_nocache").as_deref() != Ok("true") {
+        scanner = scanner.with_cache_path(metadata_cache_path);
+    }
     scanner
         .scan_with_progress(user_only, |event| match event {
             package_scanner::ScanProgress::Started { total } => {
@@ -656,4 +659,115 @@ fn build_simple_pdf(text: &str) -> Vec<u8> {
         350 + stream_len
     );
     pdf.into_bytes()
+}
+
+#[derive(Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OptimizeProgressEvent {
+    Started { total: usize },
+    Item {
+        current: usize,
+        total: usize,
+        label: String,
+        status: String,
+        message: String,
+    },
+    Finished { freed_bytes: u64 },
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CleanStorageRequest {
+    pub scan_id: u64,
+    pub categories: Vec<String>,
+    pub large_files: Vec<String>,
+    pub serial: Option<String>,
+}
+
+fn open_bridge(serial: Option<String>) -> Result<AdbBridge, String> {
+    match serial.filter(|s| !s.is_empty()) {
+        Some(serial) => AdbBridge::with_serial(serial).map_err(|e| e.to_string()),
+        None => AdbBridge::new().map_err(|e| e.to_string()),
+    }
+}
+
+#[derive(Clone, Serialize)]
+pub struct OptimizeScanProgress {
+    pub label: String,
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn scan_storage(
+    state: State<'_, AppState>,
+    serial: Option<String>,
+    on_progress: Channel<OptimizeScanProgress>,
+) -> Result<crate::optimizer::OptimizeScan, String> {
+    let scan_id = {
+        let mut slot = state.optimize.lock().map_err(|e| e.to_string())?;
+        slot.seq += 1;
+        slot.seq
+    };
+    let mut snapshot = tauri::async_runtime::spawn_blocking(move || {
+        crate::optimizer::scan(&open_bridge(serial)?, |label| {
+            let _ = on_progress.send(OptimizeScanProgress {
+                label: label.to_string(),
+            });
+        })
+    })
+    .await
+    .map_err(|e| format!("analisi interrotta: {e}"))??;
+    snapshot.scan_id = scan_id;
+    let view = crate::optimizer::OptimizeScan {
+        scan_id,
+        categories: snapshot.categories.clone(),
+        large_files: snapshot.large_files.clone(),
+    };
+    let mut slot = state.optimize.lock().map_err(|e| e.to_string())?;
+    if slot.seq == scan_id {
+        slot.current = Some(snapshot);
+    }
+    Ok(view)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn clean_storage(
+    state: State<'_, AppState>,
+    req: CleanStorageRequest,
+    on_progress: Channel<OptimizeProgressEvent>,
+) -> Result<crate::optimizer::CleanResult, String> {
+    let snapshot = {
+        let slot = state.optimize.lock().map_err(|e| e.to_string())?;
+        let current = slot.current.as_ref().ok_or("Nessuna scansione")?;
+        if current.scan_id != req.scan_id {
+            return Err("Scansione non più valida".into());
+        }
+        current.clone()
+    };
+    let ops = crate::optimizer::plan(&snapshot, &req.categories, &req.large_files)?;
+    let serial = req.serial;
+    let on_progress_worker = on_progress.clone();
+    let total = ops.len();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = on_progress_worker.send(OptimizeProgressEvent::Started { total });
+        let bridge = open_bridge(serial)?;
+        let result = crate::optimizer::execute(
+            &ops,
+            |command| bridge.shell(command).map_err(|e| e.to_string()),
+            |current, total, label, ok, message| {
+                let _ = on_progress_worker.send(OptimizeProgressEvent::Item {
+                    current,
+                    total,
+                    label: label.to_string(),
+                    status: if ok { "success" } else { "failed" }.into(),
+                    message: message.to_string(),
+                });
+            },
+        );
+        let _ = on_progress_worker.send(OptimizeProgressEvent::Finished {
+            freed_bytes: result.freed_bytes,
+        });
+        Ok(result)
+    })
+    .await
+    .map_err(|e| format!("pulizia interrotta: {e}"))?
 }

@@ -16,6 +16,11 @@ pub struct AppConfig {
     pub custom_adb_path: Option<String>,
 }
 
+pub struct OptimizeSlot {
+    pub seq: u64,
+    pub current: Option<crate::optimizer::OptimizeSnapshot>,
+}
+
 pub struct AppState {
     pub db: Mutex<ReputationDb>,
     pub cloud_sync: Mutex<CloudSync>,
@@ -23,6 +28,7 @@ pub struct AppState {
     pub config_path: PathBuf,
     pub platform_tools_dir: PathBuf,
     pub metadata_cache_path: PathBuf,
+    pub optimize: Mutex<OptimizeSlot>,
 }
 
 impl AppState {
@@ -49,8 +55,7 @@ impl AppState {
             config.supabase_url.as_deref(),
             config.supabase_key.as_deref(),
         );
-        let mut cloud_sync = CloudSync::new(backend);
-        let _ = cloud_sync.reconcile(&db);
+        let cloud_sync = CloudSync::new(backend);
 
         let platform_tools_dir = config_dir.join("platform-tools");
         let metadata_cache_path = config_dir.join("metadata-cache.json");
@@ -69,6 +74,10 @@ impl AppState {
             config_path,
             platform_tools_dir,
             metadata_cache_path,
+            optimize: Mutex::new(OptimizeSlot {
+                seq: 0,
+                current: None,
+            }),
         })
     }
 

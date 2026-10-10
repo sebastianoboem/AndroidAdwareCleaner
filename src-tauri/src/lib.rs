@@ -1,8 +1,12 @@
 mod commands;
+mod optimizer;
 mod state;
 
 use state::AppState;
-use tauri::Manager;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{Emitter, Manager};
+
+static EXIT_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -14,6 +18,16 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(app_state)
+        .setup(|app| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Some(state) = handle.try_state::<AppState>() {
+                    commands::reconcile_quiet(&state);
+                }
+                let _ = handle.emit("sync-finished", ());
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::check_setup,
             commands::run_setup,
@@ -36,14 +50,24 @@ pub fn run() {
             commands::sync_now,
             commands::export_report,
             commands::clear_metadata_cache,
+            commands::scan_storage,
+            commands::clean_storage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                if let Some(state) = app.try_state::<AppState>() {
-                    commands::reconcile_quiet(&state);
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if EXIT_SYNC_STARTED.swap(true, Ordering::SeqCst) {
+                    return;
                 }
+                api.prevent_exit();
+                let handle = app.clone();
+                std::thread::spawn(move || {
+                    if let Some(state) = handle.try_state::<AppState>() {
+                        commands::reconcile_quiet(&state);
+                    }
+                    handle.exit(0);
+                });
             }
         });
 }

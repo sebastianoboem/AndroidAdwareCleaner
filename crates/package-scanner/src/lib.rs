@@ -91,7 +91,9 @@ impl PackageScanner {
         F: FnMut(ScanProgress) + Send + Sync,
     {
         let packages = self.bridge.list_packages(user_only)?;
-        let bulk_dumpsys = self.bridge.shell("dumpsys package").unwrap_or_default();
+        let bulk_dumpsys = exec_out_gz(&self.bridge, "dumpsys package")
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
         let dump_info = parse_bulk_dumpsys(&bulk_dumpsys);
         let admins = self.load_admin_packages()?;
 
@@ -679,8 +681,33 @@ fn fetch_apk_entry(
         "{}; [ -n \"$APK\" ] && unzip -p \"$APK\" \"{safe_entry}\"",
         apk_path_prelude(package_name, apk_path)
     );
-    let bytes = bridge.exec_out(&cmd).ok()?;
+    let bytes = if entry == "resources.arsc" {
+        exec_out_gz(bridge, &cmd)?
+    } else {
+        bridge.exec_out(&cmd).ok()?
+    };
     is_plausible_apk_entry(&bytes).then_some(bytes)
+}
+
+/// Large outputs (resources.arsc can be >100 MB) are USB-bound, so they are
+/// gzipped on-device; devices without gzip fall back to the raw stream.
+fn exec_out_gz(bridge: &AdbBridge, cmd: &str) -> Option<Vec<u8>> {
+    let bytes = bridge
+        .exec_out(&format!("({cmd}) 2>/dev/null | (gzip -1 2>/dev/null || cat)"))
+        .ok()?;
+    maybe_gunzip(bytes)
+}
+
+fn maybe_gunzip(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if !bytes.starts_with(&[0x1f, 0x8b]) {
+        return Some(bytes);
+    }
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(&bytes[..])
+        .read_to_end(&mut out)
+        .ok()?;
+    Some(out)
 }
 
 fn is_plausible_apk_entry(bytes: &[u8]) -> bool {
@@ -945,6 +972,16 @@ Package [com.other.app] (def):
             b"unzip: couldn't open /data/app/x/split_config.xxxhdpi.apk: I/O error\n"
         ));
         assert!(is_plausible_apk_entry(&[0x03, 0x00, 0x08, 0x00, 0x10]));
+    }
+
+    #[test]
+    fn maybe_gunzip_handles_gzip_and_raw() {
+        use std::io::Write;
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        enc.write_all(&[0x02, 0x00, 0x0c, 0x00]).unwrap();
+        let gz = enc.finish().unwrap();
+        assert_eq!(maybe_gunzip(gz).unwrap(), vec![0x02, 0x00, 0x0c, 0x00]);
+        assert_eq!(maybe_gunzip(b"raw".to_vec()).unwrap(), b"raw".to_vec());
     }
 
     #[test]

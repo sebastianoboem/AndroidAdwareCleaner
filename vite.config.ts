@@ -5,6 +5,11 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  // `npm run tauri dev --fullscan` → npm exports npm_config_fullscan=true
+  define: {
+    // @ts-expect-error process is a nodejs global
+    __FULLSCAN__: JSON.stringify(process.env.npm_config_fullscan === "true"),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

@@ -1,6 +1,7 @@
 use crate::error::AdbError;
 use crate::resolver::resolve_adb_path;
 use serde::{Deserialize, Serialize};
+use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -163,6 +164,32 @@ impl AdbBridge {
     pub fn shell(&self, command: &str) -> Result<String, AdbError> {
         let serial = self.get_serial()?;
         self.run_adb(&["-s", &serial, "shell", command])
+    }
+
+    pub fn shell_lines<F>(&self, command: &str, mut on_line: F) -> Result<String, AdbError>
+    where
+        F: FnMut(&str),
+    {
+        let serial = self.get_serial()?;
+        let mut child = command_no_window(&self.adb)
+            .args(["-s", &serial, "shell", command])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        let mut output = String::new();
+        if let Some(stdout) = child.stdout.take() {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let line = line?;
+                on_line(&line);
+                output.push_str(&line);
+                output.push('\n');
+            }
+        }
+        let status = child.wait()?;
+        if !status.success() && output.is_empty() {
+            return Err(AdbError::CommandFailed("adb shell failed".into()));
+        }
+        Ok(output)
     }
 
     pub fn exec_out(&self, command: &str) -> Result<Vec<u8>, AdbError> {

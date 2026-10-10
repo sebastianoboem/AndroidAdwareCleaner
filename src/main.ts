@@ -1,10 +1,13 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 
 import { isGoogleApp } from "./googleApps.mjs";
+
+declare const __FULLSCAN__: boolean;
 
 // --- Types ---
 
@@ -720,15 +723,28 @@ function updateSelectAllState() {
   el.indeterminate = checkedCount > 0 && checkedCount < visible.length;
 }
 
+type PackageFlag = "suspicious" | "system" | "google" | "trusted";
+
+function packageFlag(p: PackageRow): PackageFlag | null {
+  if (p.is_suspicious) return "suspicious";
+  if (p.marked_trusted) return "trusted";
+  if (isGoogleApp(p.package_name)) return "google";
+  if (p.is_system || p.marked_system) return "system";
+  return null;
+}
+
+function flagShown(flag: PackageFlag): boolean {
+  const el = document.querySelector(`[data-flag-filter="${flag}"]`);
+  return el?.getAttribute("aria-pressed") === "true";
+}
+
 function packagePassesFilters(p: PackageRow): boolean {
   const filter = ($("#filter-text") as HTMLInputElement).value.toLowerCase();
-  const hideSystem = ($("#hide-system") as HTMLInputElement).checked;
-  const hideGoogle = ($("#hide-google") as HTMLInputElement).checked;
   const onlySuspicious = ($("#filter-suspicious") as HTMLInputElement).checked;
+  const flag = packageFlag(p);
 
-  if (hideSystem && (p.is_system || p.marked_system)) return false;
-  if (hideGoogle && isGoogleApp(p.package_name)) return false;
-  if (onlySuspicious && !p.is_suspicious) return false;
+  if (flag && !flagShown(flag)) return false;
+  if (onlySuspicious && flag !== "suspicious") return false;
   const hay = `${p.package_name} ${p.label ?? ""} ${p.author ?? ""}`.toLowerCase();
   return hay.includes(filter);
 }
@@ -793,6 +809,9 @@ function buildPackageRowHtml(p: PackageRow): string {
     : "";
 
   const checked = selectedPackages.has(p.package_name) ? " checked" : "";
+  const suspiciousOn = p.marked_suspicious;
+  const systemOn = p.marked_system;
+  const trustedOn = p.marked_trusted;
   return `
     <tr class="${p.is_suspicious ? "row-suspicious" : ""}" data-package="${p.package_name}">
       <td class="col-check"><input type="checkbox" class="pkg-check" data-package="${p.package_name}"${checked} /></td>
@@ -809,12 +828,12 @@ function buildPackageRowHtml(p: PackageRow): string {
       </td>
       <td>${p.uninstall_count > 0 ? `<strong>${p.uninstall_count}×</strong>` : "—"}</td>
       <td class="col-flags">
-        <button type="button" class="btn-flag btn-flag-suspicious ${p.my_vote === "suspicious" ? "active" : ""}"
-          data-package="${p.package_name}" title="${p.my_vote === "suspicious" ? "Ritira il voto sospetta" : "Vota sospetta"}">⚑</button>
-        <button type="button" class="btn-flag btn-flag-system ${p.my_vote === "system" ? "active" : ""}"
-          data-package="${p.package_name}" title="${p.my_vote === "system" ? "Ritira il voto sistema" : "Vota sistema"}">⚙</button>
-        <button type="button" class="btn-flag btn-flag-trusted ${p.my_vote === "trusted" ? "active" : ""}"
-          data-package="${p.package_name}" title="${p.my_vote === "trusted" ? "Ritira il voto trusted" : "Vota trusted"}">✓</button>
+        <button type="button" class="btn-flag btn-flag-suspicious ${suspiciousOn ? "active" : ""}"
+          data-package="${p.package_name}" title="${suspiciousOn ? "Ritira il voto sospetta" : "Vota sospetta"}">⚑</button>
+        <button type="button" class="btn-flag btn-flag-system ${systemOn ? "active" : ""}"
+          data-package="${p.package_name}" title="${systemOn ? "Ritira il voto sistema" : "Vota sistema"}">⚙</button>
+        <button type="button" class="btn-flag btn-flag-trusted ${trustedOn ? "active" : ""}"
+          data-package="${p.package_name}" title="${trustedOn ? "Ritira il voto trusted" : "Vota trusted"}">✓</button>
       </td>
     </tr>`;
 }
@@ -836,11 +855,13 @@ function removePackageRow(packageName: string) {
 }
 
 function setScanControlsDisabled(disabled: boolean) {
-  ($("#hide-system") as HTMLInputElement).disabled = disabled;
-  ($("#hide-google") as HTMLInputElement).disabled = disabled;
+  for (const el of document.querySelectorAll<HTMLButtonElement>("[data-flag-filter]")) {
+    el.disabled = disabled;
+  }
   ($("#filter-suspicious") as HTMLInputElement).disabled = disabled;
   ($("#filter-text") as HTMLInputElement).disabled = disabled;
   ($("#btn-rescan") as HTMLButtonElement).disabled = disabled;
+  ($("#btn-optimize") as HTMLButtonElement).disabled = disabled;
 }
 
 function renderTable() {
@@ -890,7 +911,7 @@ function updateActionButtons() {
 async function scanPackages(options?: { forceFull?: boolean }) {
   if (scanInFlight || operationInFlight) return;
 
-  const hideSystem = ($("#hide-system") as HTMLInputElement).checked;
+  const hideSystem = !flagShown("system");
   const userOnly = options?.forceFull ? false : hideSystem;
   const longHint = !userOnly;
 
@@ -964,7 +985,7 @@ async function scanPackages(options?: { forceFull?: boolean }) {
 }
 
 function onHideSystemChange() {
-  const hideSystem = ($("#hide-system") as HTMLInputElement).checked;
+  const hideSystem = !flagShown("system");
   if (!hideSystem && packagesScanScope === "user") {
     void scanPackages({ forceFull: true });
     return;
@@ -1011,7 +1032,13 @@ async function toggleMark(packageName: string, flag: "system" | "trusted" | "sus
     return;
   }
   const row = packages.find((p) => p.package_name === packageName);
-  const next = row?.my_vote === flag ? "none" : flag;
+  const on =
+    flag === "system"
+      ? row?.marked_system
+      : flag === "trusted"
+        ? row?.marked_trusted
+        : row?.marked_suspicious;
+  const next = on ? "none" : flag;
   try {
     const rep = await invoke<PackageReputation>("set_package_marks", {
       req: {
@@ -1215,8 +1242,349 @@ async function boot() {
   await runPhase2();
 }
 
+interface StorageTarget {
+  path: string;
+  bytes: number;
+}
+
+interface OptimizeCategory {
+  id: string;
+  bytes: number;
+  count: number;
+  estimated: boolean;
+  targets: StorageTarget[];
+}
+
+interface OptimizeFile {
+  path: string;
+  bytes: number;
+}
+
+interface OptimizeScan {
+  scan_id: number;
+  categories: OptimizeCategory[];
+  large_files: OptimizeFile[];
+}
+
+interface OptimizeProgressEvent {
+  kind: "started" | "item" | "finished";
+  total?: number;
+  current?: number;
+  freed_bytes?: number;
+}
+
+interface CleanResult {
+  freed_bytes: number;
+  trimmed_system_cache: boolean;
+  errors: string[];
+}
+
+const OPTIMIZE_CATEGORIES = [
+  {
+    id: "system_cache",
+    title: "System and user cache",
+    description: "Temporary data automatically created by the system and apps.",
+  },
+  {
+    id: "residual",
+    title: "Residual files of deleted apps",
+    description:
+      "Empty folders, configuration files, and settings from previously deleted apps.",
+  },
+  {
+    id: "ad_junk",
+    title: "Ad junk",
+    description: "Unwanted files accumulated from ads displayed within apps.",
+  },
+  {
+    id: "apk",
+    title: "APK files of installed apps",
+    description: "Program archives left after installation that are no longer needed.",
+  },
+  {
+    id: "large_files",
+    title: "Large files",
+    description: "Identifies and removes files occupying significant space.",
+  },
+  {
+    id: "app_cache",
+    title: "App cache",
+    description:
+      "Accumulated temporary data from games and apps, such as image thumbnails and activity logs.",
+  },
+];
+
+let optimizeToken = 0;
+let optimizeScan: OptimizeScan | null = null;
+let optimizeChecked = new Set<string>();
+let optimizeLargeSelected = new Set<string>();
+let optimizeLargeOpen = true;
+let optimizeRunning = false;
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 1024) return `${Math.max(0, Math.round(bytes))} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toLocaleString("it-IT", { maximumFractionDigits: 1 })} ${units[unit]}`;
+}
+
+function storageRelative(path: string): string {
+  for (const root of ["/sdcard/", "/storage/emulated/0/", "/storage/self/primary/"]) {
+    if (path.startsWith(root)) return path.slice(root.length);
+  }
+  return path;
+}
+
+function pathCovered(path: string, targets: StorageTarget[]): boolean {
+  return targets.some((target) => path === target.path || path.startsWith(`${target.path}/`));
+}
+
+function optimizeSelection() {
+  const scan = optimizeScan;
+  const categories: string[] = [];
+  const targets: StorageTarget[] = [];
+  let bytes = 0;
+  let count = 0;
+  if (!scan) return { categories, files: [] as string[], bytes, count, canRun: false };
+  for (const category of scan.categories) {
+    if (!optimizeChecked.has(category.id)) continue;
+    categories.push(category.id);
+    if (category.estimated) {
+      count += 1;
+      continue;
+    }
+    targets.push(...category.targets);
+    bytes += category.bytes;
+    count += category.count;
+  }
+  const files: string[] = [];
+  for (const file of scan.large_files) {
+    if (!optimizeLargeSelected.has(file.path)) continue;
+    files.push(file.path);
+    if (pathCovered(file.path, targets)) continue;
+    bytes += file.bytes;
+    count += 1;
+  }
+  return { categories, files, bytes, count, canRun: categories.length + files.length > 0 };
+}
+
+function recoverableBytes(scan: OptimizeScan): number {
+  const targets = scan.categories.filter((category) => !category.estimated).flatMap((category) => category.targets);
+  let bytes = scan.categories
+    .filter((category) => !category.estimated)
+    .reduce((sum, category) => sum + category.bytes, 0);
+  for (const file of scan.large_files) {
+    if (!pathCovered(file.path, targets)) bytes += file.bytes;
+  }
+  return bytes;
+}
+
+function showOptimizePhase(phase: "loading" | "results" | "progress" | "result" | "error") {
+  $("#optimize-loading")?.classList.toggle("hidden", phase !== "loading");
+  $("#optimize-body")?.classList.toggle("hidden", phase !== "results");
+  $("#optimize-progress")?.classList.toggle("hidden", phase !== "progress");
+  $("#optimize-result")?.classList.toggle("hidden", phase !== "result");
+  $("#optimize-error")?.classList.toggle("hidden", phase !== "error");
+  const cancel = $("#btn-optimize-cancel") as HTMLButtonElement;
+  const run = $("#btn-optimize-run") as HTMLButtonElement;
+  cancel.disabled = phase === "progress";
+  cancel.textContent = phase === "result" || phase === "error" ? "Chiudi" : "Annulla";
+  run.classList.toggle("hidden", phase !== "loading" && phase !== "results" && phase !== "progress");
+  if (phase !== "results") run.disabled = true;
+}
+
+function renderOptimize() {
+  const scan = optimizeScan;
+  const list = $("#optimize-categories");
+  if (!scan || !list) return;
+  const scroll = list.querySelector(".optimize-files")?.scrollTop ?? 0;
+  ($("#optimize-total") as HTMLElement).textContent = `Recuperabili: ${formatBytes(recoverableBytes(scan))}`;
+  const byId = new Map(scan.categories.map((category) => [category.id, category]));
+  const selectedLarge = scan.large_files.filter((file) => optimizeLargeSelected.has(file.path));
+  list.innerHTML = OPTIMIZE_CATEGORIES.map((info) => {
+    const category = byId.get(info.id);
+    const isLarge = info.id === "large_files";
+    const empty = isLarge ? scan.large_files.length === 0 : !category?.estimated && (category?.count ?? 0) === 0;
+    const checked = isLarge
+      ? scan.large_files.length > 0 && selectedLarge.length === scan.large_files.length
+      : optimizeChecked.has(info.id);
+    let meta = "Niente da pulire";
+    if (isLarge && scan.large_files.length > 0) {
+      const bytes = selectedLarge.reduce((sum, file) => sum + file.bytes, 0);
+      meta = `${selectedLarge.length} di ${scan.large_files.length} selezionati, ${formatBytes(bytes)}`;
+    } else if (info.id === "system_cache" && category && category.bytes > 0) {
+      meta = formatBytes(category.bytes);
+    } else if (!isLarge && category && category.count > 0) {
+      const unit = info.id === "apk" ? "file" : info.id === "app_cache" ? "app" : "elem.";
+      meta = `${category.count} ${unit} ${formatBytes(category.bytes)}`;
+    }
+    const files = isLarge && optimizeLargeOpen && scan.large_files.length > 0
+      ? `<div class="optimize-files">${scan.large_files
+          .map((file, index) => {
+            const selected = optimizeLargeSelected.has(file.path) ? " checked" : "";
+            return `<label class="optimize-file"><input type="checkbox" class="optimize-file-check" data-index="${index}"${selected} /><span class="path" title="${escapeHtml(file.path).replace(/"/g, "&quot;")}">${escapeHtml(storageRelative(file.path))}</span><span>${formatBytes(file.bytes)}</span></label>`;
+          })
+          .join("")}</div>`
+      : "";
+    const toggle = isLarge && scan.large_files.length > 0
+      ? `<button type="button" class="optimize-toggle" data-optimize-toggle aria-expanded="${optimizeLargeOpen}">${optimizeLargeOpen ? "▴" : "▾"}</button>`
+      : "";
+    return `<li class="optimize-category${empty ? " is-empty" : ""}">
+      <input id="optimize-check-${info.id}" type="checkbox" class="optimize-cat" data-category="${info.id}"${checked ? " checked" : ""}${empty ? " disabled" : ""} />
+      <div class="optimize-copy"><strong>${escapeHtml(info.title)}</strong><p>${escapeHtml(info.description)}</p></div>
+      <div class="optimize-meta"><span>${escapeHtml(meta)}</span>${toggle}</div>
+      ${files}
+    </li>`;
+  }).join("");
+  const largeCheck = $("#optimize-check-large_files") as HTMLInputElement | null;
+  if (largeCheck) {
+    largeCheck.indeterminate = selectedLarge.length > 0 && selectedLarge.length < scan.large_files.length;
+  }
+  const files = list.querySelector(".optimize-files");
+  if (files) files.scrollTop = scroll;
+  const selection = optimizeSelection();
+  const run = $("#btn-optimize-run") as HTMLButtonElement;
+  run.disabled = !selection.canRun;
+  run.textContent = selection.bytes > 0 ? `Ottimizza ${formatBytes(selection.bytes)}` : "Ottimizza";
+}
+
+function tailPath(path: string): string {
+  const parts = path.split("/").filter((part) => part.length > 0);
+  if (parts.length <= 3) return path;
+  return `…/${parts.slice(-3).join("/")}`;
+}
+
+async function openOptimize() {
+  if (operationInFlight) return;
+  const token = ++optimizeToken;
+  optimizeRunning = false;
+  optimizeScan = null;
+  optimizeChecked = new Set();
+  optimizeLargeSelected = new Set();
+  optimizeLargeOpen = true;
+  ($("#optimize-total") as HTMLElement).textContent = "";
+  ($("#optimize-error") as HTMLElement).textContent = "";
+  showOptimizePhase("loading");
+  $("#dialog-optimize")?.classList.remove("hidden");
+  const paths = $("#optimize-loading-paths");
+  const recent: { full: string; short: string }[] = [];
+  if (paths) paths.replaceChildren();
+  const onProgress = new Channel<{ label: string }>();
+  onProgress.onmessage = (event) => {
+    const short = tailPath(event.label);
+    if (recent[recent.length - 1]?.short === short) return;
+    recent.push({ full: event.label, short });
+    if (recent.length > 3) recent.shift();
+    if (!paths) return;
+    paths.replaceChildren(
+      ...recent.map((item) => {
+        const li = document.createElement("li");
+        li.textContent = item.short;
+        li.title = item.full;
+        return li;
+      }),
+    );
+  };
+  try {
+    const scan = await invoke<OptimizeScan>("scan_storage", {
+      serial: deviceSerial || null,
+      on_progress: onProgress,
+    });
+    if (token !== optimizeToken) return;
+    optimizeScan = scan;
+    for (const category of scan.categories) {
+      if (category.estimated || category.count > 0) optimizeChecked.add(category.id);
+    }
+    showOptimizePhase("results");
+    renderOptimize();
+  } catch (e) {
+    if (token !== optimizeToken) return;
+    ($("#optimize-error") as HTMLElement).textContent = `Errore: ${e}`;
+    showOptimizePhase("error");
+  }
+}
+
+function closeOptimize() {
+  if (optimizeRunning) return;
+  optimizeToken += 1;
+  $("#dialog-optimize")?.classList.add("hidden");
+}
+
+async function runOptimize() {
+  const scan = optimizeScan;
+  const selection = optimizeSelection();
+  if (!scan || !selection.canRun || optimizeRunning || operationInFlight) return;
+  const size = selection.bytes > 0 ? formatBytes(selection.bytes) : "dimensione non misurabile";
+  if (!confirm(`Eliminare ${selection.count} elementi, ${size}? L'operazione non è reversibile.`)) return;
+
+  optimizeRunning = true;
+  operationInFlight = true;
+  setScanControlsDisabled(true);
+  showOptimizePhase("progress");
+  ($("#optimize-progress-fill") as HTMLElement).style.width = "0%";
+  ($("#optimize-progress-text") as HTMLElement).textContent = "Pulizia…";
+
+  const onProgress = new Channel<OptimizeProgressEvent>();
+  onProgress.onmessage = (event) => {
+    if (event.kind !== "started" && event.kind !== "item") return;
+    const current = event.kind === "item" ? event.current ?? 0 : 0;
+    const total = event.total ?? 0;
+    const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+    ($("#optimize-progress-fill") as HTMLElement).style.width = `${pct}%`;
+    ($("#optimize-progress-text") as HTMLElement).textContent = `Pulizia… ${current} / ${total}`;
+  };
+
+  try {
+    const result = await invoke<CleanResult>("clean_storage", {
+      req: {
+        scan_id: scan.scan_id,
+        categories: selection.categories,
+        large_files: selection.files,
+        serial: deviceSerial || null,
+      },
+      on_progress: onProgress,
+    });
+    const summary = result.trimmed_system_cache && result.freed_bytes === 0
+      ? "Cache di sistema ridotta. Lo spazio liberato non è misurabile."
+      : result.trimmed_system_cache
+        ? `Liberati ${formatBytes(result.freed_bytes)}. Cache di sistema ridotta.`
+        : `Liberati ${formatBytes(result.freed_bytes)}.`;
+    ($("#optimize-result-text") as HTMLElement).textContent = summary;
+    const errors = $("#optimize-errors")!;
+    const shown = result.errors.slice(0, 8);
+    errors.innerHTML = shown.map((error) => `<li>${escapeHtml(error)}</li>`).join("");
+    if (result.errors.length > shown.length) {
+      errors.insertAdjacentHTML("beforeend", `<li>e altri ${result.errors.length - shown.length}</li>`);
+    }
+    showOptimizePhase("result");
+    toast(summary, result.errors.length ? "warn" : "success");
+  } catch (e) {
+    ($("#optimize-error") as HTMLElement).textContent = `Errore: ${e}`;
+    showOptimizePhase("error");
+    toast(`Errore pulizia: ${e}`, "error");
+  } finally {
+    optimizeRunning = false;
+    operationInFlight = false;
+    setScanControlsDisabled(false);
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   installIconErrorFallback();
+  if (__FULLSCAN__) {
+    for (const el of document.querySelectorAll("[data-flag-filter]")) {
+      el.setAttribute("aria-pressed", "true");
+    }
+    ($("#filter-suspicious") as HTMLInputElement).checked = false;
+  }
+  void listen("sync-finished", () => {
+    void refreshDbPanel();
+  });
   boot();
 
   $("#conn-brand")?.addEventListener("change", () => void renderConnectionGuideInDialog());
@@ -1307,6 +1675,39 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   $("#btn-rescan")?.addEventListener("click", () => void scanPackages());
+  $("#btn-optimize")?.addEventListener("click", () => void openOptimize());
+  $("#btn-optimize-cancel")?.addEventListener("click", closeOptimize);
+  $("#btn-optimize-run")?.addEventListener("click", () => void runOptimize());
+  $("#dialog-optimize")?.addEventListener("click", (e) => {
+    if (e.target === $("#dialog-optimize")) closeOptimize();
+  });
+  $("#optimize-categories")?.addEventListener("change", (e) => {
+    const input = e.target as HTMLInputElement;
+    if (!optimizeScan) return;
+    if (input.classList.contains("optimize-cat")) {
+      const id = input.dataset.category ?? "";
+      if (id === "large_files") {
+        optimizeLargeSelected = input.checked
+          ? new Set(optimizeScan.large_files.map((file) => file.path))
+          : new Set();
+      } else if (input.checked) optimizeChecked.add(id);
+      else optimizeChecked.delete(id);
+      renderOptimize();
+    }
+    if (input.classList.contains("optimize-file-check")) {
+      const file = optimizeScan.large_files[Number(input.dataset.index)];
+      if (!file) return;
+      if (input.checked) optimizeLargeSelected.add(file.path);
+      else optimizeLargeSelected.delete(file.path);
+      renderOptimize();
+    }
+  });
+  $("#optimize-categories")?.addEventListener("click", (e) => {
+    const toggle = (e.target as HTMLElement).closest("[data-optimize-toggle]");
+    if (!toggle) return;
+    optimizeLargeOpen = !optimizeLargeOpen;
+    renderOptimize();
+  });
   $("#btn-uninstall")?.addEventListener("click", bulkUninstall);
   $("#btn-export")?.addEventListener("click", () => {
     exportReport(confirm("OK = CSV, Annulla = PDF") ? "csv" : "pdf");
@@ -1316,14 +1717,19 @@ window.addEventListener("DOMContentLoaded", () => {
     updateScanInfo();
     renderTable();
   });
-  $("#hide-system")?.addEventListener("change", onHideSystemChange);
   $("#filter-suspicious")?.addEventListener("change", () => {
     updateScanInfo();
     renderTable();
   });
-  $("#hide-google")?.addEventListener("change", () => {
-    updateScanInfo();
-    renderTable();
+  document.querySelector(".flag-legend")?.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-flag-filter]");
+    if (!btn || btn.disabled) return;
+    btn.setAttribute("aria-pressed", btn.getAttribute("aria-pressed") === "true" ? "false" : "true");
+    if (btn.dataset.flagFilter === "system") onHideSystemChange();
+    else {
+      updateScanInfo();
+      renderTable();
+    }
   });
 
   $("#select-all")?.addEventListener("change", (e) => {

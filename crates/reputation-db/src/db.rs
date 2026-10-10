@@ -316,18 +316,28 @@ impl ReputationDb {
                 .map(|c| c.uninstalls)
                 .unwrap_or(0)
                 .max(remote.map(|c| c.uninstalls).unwrap_or(0));
-            let system = local
-                .map(|c| c.system)
-                .unwrap_or(0)
-                .max(remote.map(|c| c.system).unwrap_or(0));
-            let trusted = local
-                .map(|c| c.trusted)
-                .unwrap_or(0)
-                .max(remote.map(|c| c.trusted).unwrap_or(0));
-            let suspicious = local
-                .map(|c| c.suspicious)
-                .unwrap_or(0)
-                .max(remote.map(|c| c.suspicious).unwrap_or(0));
+            // Un voto esplicito di questo telefono (anche "none") conta da solo:
+            // remote_stats è un aggregato che include ancora il voto precedente fino al prossimo push.
+            let voted_here = mine.contains_key(name);
+            let pick = |local_n: u64, remote_n: u64| {
+                if voted_here {
+                    local_n
+                } else {
+                    local_n.max(remote_n)
+                }
+            };
+            let system = pick(
+                local.map(|c| c.system).unwrap_or(0),
+                remote.map(|c| c.system).unwrap_or(0),
+            );
+            let trusted = pick(
+                local.map(|c| c.trusted).unwrap_or(0),
+                remote.map(|c| c.trusted).unwrap_or(0),
+            );
+            let suspicious = pick(
+                local.map(|c| c.suspicious).unwrap_or(0),
+                remote.map(|c| c.suspicious).unwrap_or(0),
+            );
             let (marked_system, marked_trusted, marked_suspicious) =
                 effective_marks(system, trusted, suspicious);
             let my_vote = mine.get(name).cloned().filter(|f| f != "none");
@@ -665,6 +675,33 @@ mod tests {
         assert_eq!(rep.report_count, 5);
         assert!(rep.marked_suspicious);
         assert!(!rep.marked_trusted);
+    }
+
+    #[test]
+    fn synced_flag_shows_until_this_phone_votes() {
+        let db = ReputationDb::open(":memory:").unwrap();
+        db.replace_remote_stats(&[RemoteStat {
+            package_name: "com.app".into(),
+            uninstall_count: 4,
+            system_votes: 0,
+            trusted_votes: 0,
+            suspicious_votes: 1,
+        }])
+        .unwrap();
+        let before = db.get_reputation("com.app", Some("phone-a")).unwrap();
+        assert!(before.marked_suspicious);
+        assert!(before.my_vote.is_none());
+
+        db.set_vote("com.app", "phone-a", "none").unwrap();
+        let cleared = db.get_reputation("com.app", Some("phone-a")).unwrap();
+        assert!(!cleared.marked_suspicious);
+        assert!(cleared.my_vote.is_none());
+        assert!(db.get_reputation("com.app", Some("phone-b")).unwrap().marked_suspicious);
+
+        db.set_vote("com.app", "phone-a", "trusted").unwrap();
+        let trusted = db.get_reputation("com.app", Some("phone-a")).unwrap();
+        assert!(trusted.marked_trusted);
+        assert!(!trusted.marked_suspicious);
     }
 
     #[test]
